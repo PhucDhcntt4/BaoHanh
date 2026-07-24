@@ -1,0 +1,29 @@
+[
+  {
+    "order_code": "DH123456",
+    "phone": "0912345678",
+    "customer_name": "Nguyễn Văn A",
+    "order_status": "completed",
+    "warranty_status": "activated",
+    "products": [
+      {
+        "product_code": "G81T6",
+        "product_name": "Giày cao gót nữ"
+      }
+    ],
+    "warranty_activated_at": "2026-07-23T16:33:56.199789+07:00"
+  },
+  {
+    "order_code": "DH123457",
+    "phone": "0912345678",
+    "customer_name": "Nguyễn Văn A",
+    "order_status": "completed",
+    "warranty_status": "not_activated",
+    "products": [
+      {
+        "product_code": "D81U8",
+        "product_name": "Dép cao gót nữ"
+      }
+    ]
+  }
+]

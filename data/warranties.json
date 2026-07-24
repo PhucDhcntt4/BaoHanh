@@ -1,0 +1,16 @@
+[
+  {
+    "warranty_id": "82910173-8eda-47a0-8632-6a6a729a765d",
+    "order_code": "DH123456",
+    "phone": "0912345678",
+    "customer_id": "facebook_user_001",
+    "products": [
+      {
+        "product_code": "G81T6",
+        "product_name": "Giày cao gót nữ"
+      }
+    ],
+    "status": "activated",
+    "activated_at": "2026-07-23T16:33:56.199789+07:00"
+  }
+]
