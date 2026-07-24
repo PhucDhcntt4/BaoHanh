@@ -7,7 +7,7 @@ _lock = threading.Lock()
 
 
 class JsonStore:
-    def __init__(self, path: str):
+    def __init__(self, path: str | Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -16,7 +16,10 @@ class JsonStore:
             if not self.path.exists():
                 return default
             with self.path.open("r", encoding="utf-8") as file:
-                return json.load(file)
+                content = file.read().strip()
+                if not content:
+                    return default
+                return json.loads(content)
 
     def write(self, data: Any) -> None:
         temp_path = self.path.with_suffix(self.path.suffix + ".tmp")

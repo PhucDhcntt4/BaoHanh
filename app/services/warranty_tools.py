@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 from app.services.order_service import OrderService
@@ -6,6 +7,7 @@ from app.services.warranty_service import WarrantyService
 
 order_service = OrderService()
 warranty_service = WarrantyService()
+logger = logging.getLogger(__name__)
 
 
 def search_order(
@@ -68,6 +70,7 @@ def search_order(
         }
 
     except Exception as error:
+        logger.exception("Không thể tìm đơn hàng")
         return {
             "success": False,
             "status": "search_error",
@@ -78,6 +81,7 @@ def search_order(
 
 def activate_warranty(
     order_code: str,
+    phone: str,
     customer_id: str,
 ) -> dict[str, Any]:
     """
@@ -89,6 +93,10 @@ def activate_warranty(
         order_code:
             Mã đơn hàng cần kích hoạt bảo hành.
 
+        phone:
+            Số điện thoại khách dùng khi đặt đơn hàng.
+            Số này phải khớp với mã đơn cần kích hoạt.
+
         customer_id:
             Mã định danh người đang nhắn tin, ví dụ
             Facebook PSID, Zalo user ID hoặc ID website.
@@ -98,17 +106,22 @@ def activate_warranty(
     """
 
     try:
-        order = order_service.get_by_order_code(
-            order_code=order_code
+        matching_orders = order_service.search(
+            phone=phone,
+            order_code=order_code,
         )
 
-        if not order:
+        if len(matching_orders) != 1:
             return {
                 "success": False,
                 "status": "order_not_found",
-                "message": "Không tìm thấy mã đơn hàng.",
+                "message": (
+                    "Không tìm thấy đơn hàng khớp với "
+                    "số điện thoại và mã đơn được cung cấp."
+                ),
             }
 
+        order = matching_orders[0]
         order_status = order.get("order_status")
 
         if order_status != "completed":
@@ -149,6 +162,7 @@ def activate_warranty(
         }
 
     except Exception as error:
+        logger.exception("Không thể kích hoạt bảo hành")
         return {
             "success": False,
             "status": "activation_error",

@@ -11,18 +11,176 @@
         "product_name": "Giày cao gót nữ"
       }
     ],
-    "warranty_activated_at": "2026-07-23T16:33:56.199789+07:00"
+    "warranty_activated_at": "2026-07-24T10:13:41.490285+07:00"
   },
   {
     "order_code": "DH123457",
     "phone": "0912345678",
     "customer_name": "Nguyễn Văn A",
     "order_status": "completed",
-    "warranty_status": "not_activated",
+    "warranty_status": "activated",
     "products": [
       {
         "product_code": "D81U8",
         "product_name": "Dép cao gót nữ"
+      }
+    ],
+    "warranty_activated_at": "2026-07-24T10:06:42.922840+07:00"
+  },
+  {
+    "order_code": "DH100001",
+    "phone": "0901111111",
+    "customer_name": "Nguyễn Văn An",
+    "order_status": "completed",
+    "warranty_status": "not_activated",
+    "created_at": "2026-07-20T09:00:00+07:00",
+    "products": [
+      {
+        "product_code": "G81T6",
+        "product_name": "Giày cao gót G81T6",
+        "quantity": 1
+      }
+    ]
+  },
+  {
+    "order_code": "DH100002",
+    "phone": "0901111111",
+    "customer_name": "Nguyễn Văn An",
+    "order_status": "completed",
+    "warranty_status": "activated",
+    "created_at": "2026-07-21T10:00:00+07:00",
+    "products": [
+      {
+        "product_code": "D81U8",
+        "product_name": "Dép cao gót D81U8",
+        "quantity": 1
+      }
+    ],
+    "warranty_activated_at": "2026-07-24T10:35:33.840092+07:00"
+  },
+  {
+    "order_code": "DH100003",
+    "phone": "0902222222",
+    "customer_name": "Trần Thị Bình",
+    "order_status": "completed",
+    "warranty_status": "activated",
+    "warranty_activated_at": "2026-07-22T14:00:00+07:00",
+    "created_at": "2026-07-19T08:00:00+07:00",
+    "products": [
+      {
+        "product_code": "JS14",
+        "product_name": "Túi xách JS14",
+        "quantity": 1
+      }
+    ]
+  },
+  {
+    "order_code": "DH100004",
+    "phone": "0903333333",
+    "customer_name": "Lê Văn Cường",
+    "order_status": "pending",
+    "warranty_status": "not_activated",
+    "created_at": "2026-07-23T09:30:00+07:00",
+    "products": [
+      {
+        "product_code": "G5856",
+        "product_name": "Giày G5856",
+        "quantity": 1
+      }
+    ]
+  },
+  {
+    "order_code": "DH100005",
+    "phone": "0904444444",
+    "customer_name": "Phạm Thị Dung",
+    "order_status": "completed",
+    "warranty_status": "not_activated",
+    "created_at": "2026-07-18T15:00:00+07:00",
+    "products": [
+      {
+        "product_code": "GCM04",
+        "product_name": "Giày GCM04",
+        "quantity": 1
+      },
+      {
+        "product_code": "JS14",
+        "product_name": "Túi xách JS14",
+        "quantity": 1
+      }
+    ]
+  },
+  {
+    "order_code": "DH100006",
+    "phone": "0905555555",
+    "customer_name": "Hoàng Minh",
+    "order_status": "completed",
+    "warranty_status": "not_activated",
+    "created_at": "2026-07-17T13:00:00+07:00",
+    "products": [
+      {
+        "product_code": "D32I6",
+        "product_name": "Dép D32I6",
+        "quantity": 2
+      }
+    ]
+  },
+  {
+    "order_code": "DH100007",
+    "phone": "0906666666",
+    "customer_name": "Võ Hải",
+    "order_status": "completed",
+    "warranty_status": "not_activated",
+    "created_at": "2026-07-16T11:00:00+07:00",
+    "products": [
+      {
+        "product_code": "G5863",
+        "product_name": "Giày G5863",
+        "quantity": 1
+      }
+    ]
+  },
+  {
+    "order_code": "DH100008",
+    "phone": "0907777777",
+    "customer_name": "Mai Lan",
+    "order_status": "completed",
+    "warranty_status": "not_activated",
+    "created_at": "2026-07-15T10:00:00+07:00",
+    "products": [
+      {
+        "product_code": "JS14",
+        "product_name": "Túi JS14",
+        "quantity": 1
+      }
+    ]
+  },
+  {
+    "order_code": "DH100009",
+    "phone": "0908888888",
+    "customer_name": "Nguyễn Khánh",
+    "order_status": "completed",
+    "warranty_status": "not_activated",
+    "created_at": "2026-07-14T09:00:00+07:00",
+    "products": [
+      {
+        "product_code": "G81T6",
+        "product_name": "Giày G81T6",
+        "quantity": 1
+      }
+    ]
+  },
+  {
+    "order_code": "DH100010",
+    "phone": "0909999999",
+    "customer_name": "Trần Ngọc",
+    "order_status": "completed",
+    "warranty_status": "not_activated",
+    "created_at": "2026-07-13T08:00:00+07:00",
+    "products": [
+      {
+        "product_code": "D81U8",
+        "product_name": "Dép D81U8",
+        "quantity": 1
       }
     ]
   }

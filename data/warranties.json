@@ -1,9 +1,23 @@
 [
   {
-    "warranty_id": "82910173-8eda-47a0-8632-6a6a729a765d",
-    "order_code": "DH123456",
+    "warranty_id": "309196c7-5df9-454d-8be4-014996261243",
+    "order_code": "DH123457",
     "phone": "0912345678",
     "customer_id": "facebook_user_001",
+    "products": [
+      {
+        "product_code": "D81U8",
+        "product_name": "Dép cao gót nữ"
+      }
+    ],
+    "status": "activated",
+    "activated_at": "2026-07-24T10:06:42.922840+07:00"
+  },
+  {
+    "warranty_id": "f23e21b5-b6a2-48a7-a2da-ad3174ea1551",
+    "order_code": "DH123456",
+    "phone": "0912345678",
+    "customer_id": "test_user_007",
     "products": [
       {
         "product_code": "G81T6",
@@ -11,6 +25,21 @@
       }
     ],
     "status": "activated",
-    "activated_at": "2026-07-23T16:33:56.199789+07:00"
+    "activated_at": "2026-07-24T10:13:41.490285+07:00"
+  },
+  {
+    "warranty_id": "d42d3017-8f01-4a44-8b73-bd5606f31692",
+    "order_code": "DH100002",
+    "phone": "0901111111",
+    "customer_id": "test_user_007",
+    "products": [
+      {
+        "product_code": "D81U8",
+        "product_name": "Dép cao gót D81U8",
+        "quantity": 1
+      }
+    ],
+    "status": "activated",
+    "activated_at": "2026-07-24T10:35:33.840092+07:00"
   }
 ]

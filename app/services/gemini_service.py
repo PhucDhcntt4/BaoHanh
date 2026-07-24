@@ -1,10 +1,10 @@
 import os
-from pathlib import Path
 from typing import Any
 
 from google import genai
 from google.genai import types # type: ignore
 
+from app.config import WARRANTY_PROMPT_PATH
 from app.services.warranty_tools import (
     activate_warranty,
     search_order,
@@ -29,16 +29,12 @@ class GeminiService:
             "gemini-2.5-flash",
         )
 
-        prompt_path = Path(
-            "prompts/warranty_agent.txt"
-        )
-
-        if not prompt_path.exists():
+        if not WARRANTY_PROMPT_PATH.exists():
             raise RuntimeError(
-                f"Không tìm thấy prompt: {prompt_path}"
+                f"Không tìm thấy prompt: {WARRANTY_PROMPT_PATH}"
             )
 
-        self.system_prompt = prompt_path.read_text(
+        self.system_prompt = WARRANTY_PROMPT_PATH.read_text(
             encoding="utf-8"
         )
 

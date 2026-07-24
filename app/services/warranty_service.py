@@ -1,7 +1,9 @@
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from app.config import ORDERS_PATH, WARRANTIES_PATH
 from app.services.json_store import JsonStore
 
 
@@ -11,8 +13,8 @@ VN_TIMEZONE = timezone(timedelta(hours=7))
 class WarrantyService:
     def __init__(
         self,
-        warranty_path: str = "data/warranties.json",
-        order_path: str = "data/orders.json",
+        warranty_path: str | Path = WARRANTIES_PATH,
+        order_path: str | Path = ORDERS_PATH,
     ) -> None:
         self.warranty_store = JsonStore(warranty_path)
         self.order_store = JsonStore(order_path)

@@ -1,6 +1,8 @@
 import re
+from pathlib import Path
 from typing import Any
 
+from app.config import ORDERS_PATH
 from app.services.json_store import JsonStore
 
 
@@ -10,15 +12,19 @@ def normalize_phone(value: str | None) -> str | None:
     phone = re.sub(r"\D", "", value)
     return phone or None
 
-def normalize_order_code( value: str| None) -> str | None:
 
+def normalize_order_code(value: str | None) -> str | None:
     if not value:
         return None
 
     return value.strip().upper()
 
-class OrderSerrvice:
-    def __init__(self, path: str = "data/orders.json") -> None:
+
+class OrderService:
+    def __init__(
+        self,
+        path: str | Path = ORDERS_PATH,
+    ) -> None:
         self.store = JsonStore(path)
 
     def search(
@@ -34,25 +40,27 @@ class OrderSerrvice:
         - Đúng mã đơn
         """
 
-        normalize_phone = normalize_phone(phone)
-        normalize_order_code = normalize_order_code(order_code)
+        normalized_phone = normalize_phone(phone)
+        normalized_order_code = normalize_order_code(order_code)
 
-        if not normalize_phone:
-            return[]
+        if not normalized_phone:
+            return []
 
         orders = self.store.read(default=[])
         matches: list[dict[str, Any]] = []
 
         for order in orders:
-            orders_phone = normalize_phone(order.get("phone"))
+            order_phone = normalize_phone(order.get("phone"))
 
-            order_code_value = normalize_order_code(order.get("order_code"))
+            order_code_value = normalize_order_code(
+                order.get("order_code")
+            )
 
-            same_phone = orders_phone == normalize_phone
+            same_phone = order_phone == normalized_phone
 
             same_order_code = (
-                normalize_order_code is None
-                or order_code_value == normalize_order_code
+                normalized_order_code is None
+                or order_code_value == normalized_order_code
             )
 
             if same_phone and same_order_code:
