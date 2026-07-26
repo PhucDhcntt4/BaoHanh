@@ -2,12 +2,43 @@ import logging
 from typing import Any
 
 from app.services.order_service import OrderService
+from app.services.policy_service import PolicyService
 from app.services.warranty_service import WarrantyService
 
 
 order_service = OrderService()
 warranty_service = WarrantyService()
+policy_service = PolicyService()
 logger = logging.getLogger(__name__)
+
+
+def search_warranty_policy(
+    question: str,
+) -> dict[str, Any]:
+    """
+    Tra cứu chính sách đổi hàng và bảo hành chính thức.
+
+    Dùng công cụ này trước khi trả lời mọi câu hỏi về điều kiện,
+    trường hợp hỗ trợ, địa chỉ gửi hàng, chi phí hoặc thời gian
+    xử lý đổi hàng/bảo hành.
+
+    Args:
+        question:
+            Câu hỏi chính sách của khách hàng.
+
+    Returns:
+        Nội dung chính sách chính thức dùng để trả lời khách.
+    """
+
+    try:
+        return policy_service.search(question)
+    except Exception:
+        logger.exception("Không thể đọc chính sách bảo hành")
+        return {
+            "success": False,
+            "status": "policy_error",
+            "content": "",
+        }
 
 
 def search_order(

@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 
 from dotenv import load_dotenv # type: ignore
 from fastapi import FastAPI, HTTPException
@@ -12,6 +13,14 @@ from app.services.gemini_service import GeminiService
 
 load_dotenv()
 
+from app.routes.telegram_router import (  # noqa: E402
+    configure_telegram,
+    router as telegram_router,
+    telegram_ready,
+)
+
+logger = logging.getLogger(__name__)
+
 
 gemini_service: GeminiService | None = None
 
@@ -22,11 +31,23 @@ async def lifespan(app: FastAPI):
 
     try:
         gemini_service = GeminiService()
-        print("Gemini Warranty Agent đã sẵn sàng")
+        logger.info("Gemini Warranty Agent is ready")
+
+        try:
+            configure_telegram(gemini_service)
+            logger.info("Telegram Bot is ready")
+        except Exception as error:
+            logger.exception(
+                "Telegram Bot initialization failed: %s",
+                error,
+            )
 
     except Exception as error:
         gemini_service = None
-        print(f"Không thể khởi tạo Gemini Agent: {error}")
+        logger.exception(
+            "Gemini Agent initialization failed: %s",
+            error,
+        )
 
     yield
 
@@ -36,6 +57,7 @@ app = FastAPI(
     version="0.2.0",
     lifespan=lifespan,
 )
+app.include_router(telegram_router)
 
 
 @app.get("/health")
@@ -43,6 +65,7 @@ def health():
     return {
         "status": "ok",
         "gemini_ready": gemini_service is not None,
+        "telegram_ready": telegram_ready(),
     }
 
 
@@ -77,7 +100,7 @@ def handle_warranty_message(
         )
 
     except Exception as error:
-        print(f"WARRANTY AGENT ERROR: {error}")
+        logger.exception("Warranty Agent request failed: %s", error)
 
         raise HTTPException(
             status_code=500,

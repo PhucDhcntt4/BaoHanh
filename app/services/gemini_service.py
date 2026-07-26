@@ -8,6 +8,7 @@ from app.config import WARRANTY_PROMPT_PATH
 from app.services.warranty_tools import (
     activate_warranty,
     search_order,
+    search_warranty_policy,
 )
 
 
@@ -39,6 +40,7 @@ class GeminiService:
         )
 
         self.tools = [
+            search_warranty_policy,
             search_order,
             activate_warranty,
         ]

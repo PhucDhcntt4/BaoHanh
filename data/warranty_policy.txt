@@ -1,0 +1,42 @@
+HƯỚNG DẪN ĐỔI HÀNG / BẢO HÀNH
+
+1. Điều kiện đổi hàng
+- Hỗ trợ đổi trong vòng 07 ngày kể từ ngày nhận hàng
+- Sản phẩm còn mới, chưa qua sử dụng
+- Có đầy đủ hộp và phụ kiện đi kèm
+
+2. Trường hợp được hỗ trợ đổi
+- Không vừa size
+- Không thích mẫu
+- Sản phẩm lỗi kỹ thuật
+- Giao nhầm hàng
+
+3. Trường hợp không hỗ trợ
+- Sản phẩm đã qua sử dụng
+- Hư hỏng do tác động bên ngoài
+- Quá thời gian hỗ trợ đổi
+
+4. Hướng dẫn gửi hàng đổi
+Khách gửi sản phẩm về địa chỉ:
+
+Giày Da Đông Hải
+740/14 Quốc Lộ 13, Phường Hiệp Bình Phước, TP Thủ Đức, TP.HCM
+SĐT: 0902.452.036
+
+5. Hướng dẫn gửi bảo hành
+Khách gửi sản phẩm về:
+
+Giày Da Đông Hải
+227-229 Hai Bà Trưng, Phường Võ Thị Sáu, Quận 3, TP.HCM
+SĐT: 0902.452.036
+
+6. Phí đổi hàng
+- Lỗi từ nhà sản xuất: miễn phí
+- Đổi size / đổi mẫu: khách hỗ trợ phí gửi hàng
+
+7. Thời gian xử lý
+- 5 - 7 ngày làm việc
+
+8. Fallback
+Nếu bot không chắc thông tin:
+“Dạ em xin phép chuyển bộ phận hỗ trợ kiểm tra và phản hồi mình nhanh nhất ạ.”

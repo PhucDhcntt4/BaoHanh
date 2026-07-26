@@ -41,5 +41,50 @@
     ],
     "status": "activated",
     "activated_at": "2026-07-24T10:35:33.840092+07:00"
+  },
+  {
+    "warranty_id": "bd7ec922-d748-4c24-9048-6cf5b8e4ffc6",
+    "order_code": "DH100001",
+    "phone": "0901111111",
+    "customer_id": "test_user_007",
+    "products": [
+      {
+        "product_code": "G81T6",
+        "product_name": "Giày cao gót G81T6",
+        "quantity": 1
+      }
+    ],
+    "status": "activated",
+    "activated_at": "2026-07-24T12:33:51.828901+07:00"
+  },
+  {
+    "warranty_id": "7f6ae3d7-ffca-4c73-9170-f37ae07d34b2",
+    "order_code": "DH100010",
+    "phone": "0764776093",
+    "customer_id": "telegram:1481483387",
+    "products": [
+      {
+        "product_code": "D81U8",
+        "product_name": "Dép D81U8",
+        "quantity": 1
+      }
+    ],
+    "status": "activated",
+    "activated_at": "2026-07-26T22:12:40.333051+07:00"
+  },
+  {
+    "warranty_id": "97185069-0d45-4ea3-b8a9-d8781e1d14f2",
+    "order_code": "DH100012",
+    "phone": "0764776093",
+    "customer_id": "telegram:1481483387",
+    "products": [
+      {
+        "product_code": "D81U8",
+        "product_name": "Dép D81U8",
+        "quantity": 1
+      }
+    ],
+    "status": "activated",
+    "activated_at": "2026-07-26T22:25:13.842128+07:00"
   }
 ]

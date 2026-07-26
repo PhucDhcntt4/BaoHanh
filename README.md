@@ -66,6 +66,57 @@ Endpoint:
 POST /api/warranty/message
 ```
 
+## Kết nối Telegram
+
+Thêm cấu hình vào `.env`:
+
+```env
+TELEGRAM_BOT_TOKEN=token_nhận_từ_BotFather
+TELEGRAM_WEBHOOK_SECRET=chuỗi_bí_mật_ngẫu_nhiên
+```
+
+Khởi động API:
+
+```powershell
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+```
+
+Telegram chỉ gọi được webhook HTTPS công khai. Sau khi dùng ngrok,
+Cloudflare Tunnel hoặc triển khai lên server, đăng ký webhook:
+
+```powershell
+$token = "TELEGRAM_BOT_TOKEN"
+$secret = "TELEGRAM_WEBHOOK_SECRET"
+$url = "https://your-domain.example/api/telegram/webhook"
+
+Invoke-RestMethod `
+  -Method Post `
+  -Uri "https://api.telegram.org/bot$token/setWebhook" `
+  -ContentType "application/json" `
+  -Body (@{
+    url = $url
+    secret_token = $secret
+    allowed_updates = @("message")
+  } | ConvertTo-Json)
+```
+
+Kiểm tra trạng thái webhook:
+
+```powershell
+Invoke-RestMethod `
+  -Uri "https://api.telegram.org/bot$token/getWebhookInfo"
+```
+
+Endpoint Telegram:
+
+```text
+POST /api/telegram/webhook
+```
+
+Bot hiện hỗ trợ tin nhắn văn bản, giữ tối đa 10 lượt user/model gần
+nhất theo `chat_id`, bỏ qua update trùng và xác minh header webhook
+nếu có `TELEGRAM_WEBHOOK_SECRET`.
+
 ## Lưu ý triển khai thực tế
 
 Trong API A0, các phản hồi được trả về trong mảng `messages`. Khi kết nối Facebook,
