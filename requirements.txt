@@ -1,6 +1,11 @@
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-google-genai>=1.0.0
-python-dotenv>=1.0.1
-pydantic>=2.8.0
-requests>=2.32.0
+# API
+fastapi==0.139.0
+uvicorn[standard]==0.49.0
+pydantic==2.12.5
+
+# AI agent
+google-genai==2.8.0
+
+# Configuration and Telegram HTTP client
+python-dotenv==1.0.1
+requests==2.34.2

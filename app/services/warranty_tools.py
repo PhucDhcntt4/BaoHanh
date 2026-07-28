@@ -155,7 +155,12 @@ def activate_warranty(
         order = matching_orders[0]
         order_status = order.get("order_status")
 
-        if order_status != "completed":
+        eligible_order_statuses = {
+            "submitted",
+            "completed",
+        }
+
+        if order_status not in eligible_order_statuses:
             return {
                 "success": False,
                 "status": "order_not_eligible",

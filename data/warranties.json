@@ -1,90 +1,37 @@
 [
   {
-    "warranty_id": "309196c7-5df9-454d-8be4-014996261243",
-    "order_code": "DH123457",
-    "phone": "0912345678",
-    "customer_id": "facebook_user_001",
-    "products": [
-      {
-        "product_code": "D81U8",
-        "product_name": "Dép cao gót nữ"
-      }
-    ],
-    "status": "activated",
-    "activated_at": "2026-07-24T10:06:42.922840+07:00"
-  },
-  {
-    "warranty_id": "f23e21b5-b6a2-48a7-a2da-ad3174ea1551",
-    "order_code": "DH123456",
-    "phone": "0912345678",
-    "customer_id": "test_user_007",
-    "products": [
-      {
-        "product_code": "G81T6",
-        "product_name": "Giày cao gót nữ"
-      }
-    ],
-    "status": "activated",
-    "activated_at": "2026-07-24T10:13:41.490285+07:00"
-  },
-  {
-    "warranty_id": "d42d3017-8f01-4a44-8b73-bd5606f31692",
-    "order_code": "DH100002",
-    "phone": "0901111111",
-    "customer_id": "test_user_007",
-    "products": [
-      {
-        "product_code": "D81U8",
-        "product_name": "Dép cao gót D81U8",
-        "quantity": 1
-      }
-    ],
-    "status": "activated",
-    "activated_at": "2026-07-24T10:35:33.840092+07:00"
-  },
-  {
-    "warranty_id": "bd7ec922-d748-4c24-9048-6cf5b8e4ffc6",
-    "order_code": "DH100001",
-    "phone": "0901111111",
-    "customer_id": "test_user_007",
-    "products": [
-      {
-        "product_code": "G81T6",
-        "product_name": "Giày cao gót G81T6",
-        "quantity": 1
-      }
-    ],
-    "status": "activated",
-    "activated_at": "2026-07-24T12:33:51.828901+07:00"
-  },
-  {
-    "warranty_id": "7f6ae3d7-ffca-4c73-9170-f37ae07d34b2",
-    "order_code": "DH100010",
+    "warranty_id": "25f73c98-bc14-47b9-b6ba-f9f116e5ab9c",
+    "order_code": "4052",
     "phone": "0764776093",
     "customer_id": "telegram:1481483387",
     "products": [
       {
-        "product_code": "D81U8",
-        "product_name": "Dép D81U8",
+        "product_code": "GXR43",
+        "product_name": "Giày Thể Thao Zuciani Air Float N28",
         "quantity": 1
       }
     ],
     "status": "activated",
-    "activated_at": "2026-07-26T22:12:40.333051+07:00"
+    "activated_at": "2026-07-28T09:16:04.750803+07:00"
   },
   {
-    "warranty_id": "97185069-0d45-4ea3-b8a9-d8781e1d14f2",
-    "order_code": "DH100012",
-    "phone": "0764776093",
+    "warranty_id": "24bdb4ea-bd73-490f-9594-9f2159cbcc17",
+    "order_code": "4078",
+    "phone": "0979005727",
     "customer_id": "telegram:1481483387",
     "products": [
       {
-        "product_code": "D81U8",
-        "product_name": "Dép D81U8",
+        "product_code": "D1821",
+        "product_name": "Dép Quai Ngang Nam Đông Hải Cách Điệu Đan Chéo",
+        "quantity": 1
+      },
+      {
+        "product_code": "D1826",
+        "product_name": "Dép Nam Đông Hải Quai Khóa",
         "quantity": 1
       }
     ],
     "status": "activated",
-    "activated_at": "2026-07-26T22:25:13.842128+07:00"
+    "activated_at": "2026-07-28T09:26:26.621452+07:00"
   }
 ]
