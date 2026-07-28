@@ -4,4 +4,5 @@ __pycache__/
 .venv/
 .pytest_cache/
 .data/
-.prompts/*
+prompts/*
+!prompts/.gitkeep
