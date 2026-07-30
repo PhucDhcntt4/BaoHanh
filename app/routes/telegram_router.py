@@ -3,6 +3,7 @@ import os
 import threading
 import time
 import re
+import unicodedata
 from collections import deque
 from typing import Any
 
@@ -20,6 +21,10 @@ from app.product_recognition.image_intent_service import (
 from app.services.gemini_service import GeminiService
 from app.services.image_extraction_service import (
     ImageExtractionService,
+)
+from app.services.order_service import (
+    OrderService,
+    normalize_phone,
 )
 from app.services.telegram_service import TelegramService
 from app.services.warranty_tools import (
@@ -43,6 +48,7 @@ telegram_service: TelegramService | None = None
 image_extraction_service: ImageExtractionService | None = None
 image_intent_service: ImageIntentService | None = None
 product_image_handler: ProductImageHandler | None = None
+order_service = OrderService()
 
 _state_lock = threading.Lock()
 _histories: dict[int, deque[dict[str, str]]] = {}
@@ -138,9 +144,32 @@ def _cancel_pending_activation(chat_id: int) -> bool:
 
 
 def _mask_phone(phone: str) -> str:
-    if len(phone) < 7:
-        return phone
-    return f"{phone[:3]}****{phone[-3:]}"
+    return phone
+
+
+def _masked_phone_matches(
+    full_phone: str,
+    masked_phone: str,
+) -> bool:
+    normalized_full = normalize_phone(full_phone)
+    normalized_masked = (
+        masked_phone.replace("x", "*").replace("X", "*")
+    )
+
+    if not normalized_full or "*" not in normalized_masked:
+        return False
+
+    prefix, _, suffix = normalized_masked.partition("*")
+    suffix = suffix.lstrip("*")
+
+    if not prefix or not suffix:
+        return False
+
+    return (
+        normalized_full.startswith(prefix)
+        and normalized_full.endswith(suffix)
+        and len(normalized_full) >= len(prefix) + len(suffix)
+    )
 
 
 def _agent_reply(
@@ -231,6 +260,40 @@ def _send_product_photos(
         ).upper()
 
         photo_urls = product.get("image_urls") or []
+        images_by_color = (
+            product.get("image_urls_by_color") or {}
+        )
+
+        # Nếu khách yêu cầu một màu cụ thể, ưu tiên album của đúng
+        # Shopify Product màu đó thay vì album mặc định của mã mẫu.
+        normalized_message = unicodedata.normalize(
+            "NFD",
+            str(user_message or "").casefold(),
+        )
+        normalized_message = "".join(
+            character
+            for character in normalized_message
+            if unicodedata.category(character) != "Mn"
+        ).replace("đ", "d")
+
+        for color, color_urls in images_by_color.items():
+            normalized_color = unicodedata.normalize(
+                "NFD",
+                str(color).casefold(),
+            )
+            normalized_color = "".join(
+                character
+                for character in normalized_color
+                if unicodedata.category(character) != "Mn"
+            ).replace("đ", "d")
+
+            if (
+                normalized_color
+                and normalized_color in normalized_message
+                and color_urls
+            ):
+                photo_urls = color_urls
+                break
 
         if not photo_urls and product.get("featured_image"):
             photo_urls = [product["featured_image"]]
@@ -602,11 +665,124 @@ def process_image(
             mime_type=mime_type,
         )
         phone = extracted.get("phone")
+        masked_phone = extracted.get("masked_phone")
         order_code = extracted.get("order_code")
-        confident = (
+        phone_confident = (
             extracted.get("phone_confident") is True
-            and extracted.get("order_code_confident") is True
         )
+        masked_phone_confident = (
+            extracted.get("masked_phone_confident") is True
+        )
+        order_code_confident = (
+            extracted.get("order_code_confident") is True
+        )
+        confident = (
+            phone_confident
+            and order_code_confident
+        )
+
+        if (
+            not phone
+            and masked_phone
+            and masked_phone_confident
+            and order_code
+            and order_code_confident
+        ):
+            matched_order = order_service.get_by_order_code(
+                order_code
+            )
+            stored_phone = (
+                str(matched_order.get("phone") or "")
+                if matched_order
+                else ""
+            )
+
+            if (
+                not matched_order
+                or not _masked_phone_matches(
+                    stored_phone,
+                    masked_phone,
+                )
+            ):
+                telegram_service.send_message(
+                    chat_id,
+                    (
+                        f"Dạ em đọc được mã đơn {order_code} và số điện "
+                        f"thoại {masked_phone}, nhưng thông tin chưa khớp "
+                        "với đơn hàng. Anh/chị vui lòng kiểm tra lại ạ."
+                    ),
+                )
+                return
+
+            if matched_order.get("warranty_status") == "activated":
+                telegram_service.send_message(
+                    chat_id,
+                    (
+                        f"Dạ em đã xác minh mã đơn {order_code} với số "
+                        f"điện thoại {masked_phone}. Đơn này đã được kích "
+                        "hoạt bảo hành trước đó rồi ạ."
+                    ),
+                )
+                return
+
+            _save_pending_activation(
+                chat_id=chat_id,
+                phone=stored_phone,
+                order_code=order_code,
+            )
+            telegram_service.send_message(
+                chat_id,
+                (
+                    f"Dạ em đã xác minh được mã đơn {order_code} và số "
+                    f"điện thoại {masked_phone}. Anh/chị trả lời XÁC NHẬN "
+                    "để kích hoạt bảo hành hoặc HỦY để dừng ạ. 😊"
+                ),
+            )
+            return
+
+        if (
+            order_code
+            and order_code_confident
+            and (not phone or not phone_confident)
+        ):
+            reply = (
+                f"Dạ em đã đọc được mã đơn {order_code}. Trên ảnh chưa "
+                "có số điện thoại đặt hàng, anh/chị gửi số điện thoại "
+                "giúp em để em xác minh và kích hoạt bảo hành nhé. 😊"
+            )
+            telegram_service.send_message(chat_id, reply)
+            _append_history(
+                chat_id,
+                (
+                    "Khách gửi ảnh kích hoạt bảo hành. Hệ thống đã đọc "
+                    f"chắc chắn mã đơn {order_code}, nhưng ảnh không có "
+                    "số điện thoại."
+                ),
+                reply,
+            )
+            return
+
+        if (
+            phone
+            and phone_confident
+            and (not order_code or not order_code_confident)
+        ):
+            reply = (
+                f"Dạ em đã đọc được số điện thoại {phone}, nhưng chưa "
+                "đọc rõ mã đơn. Anh/chị gửi thêm mã đơn hoặc ảnh có mã "
+                "đơn rõ hơn giúp em nhé. 😊"
+            )
+            telegram_service.send_message(chat_id, reply)
+            _append_history(
+                chat_id,
+                (
+                    "Khách gửi ảnh kích hoạt bảo hành. Hệ thống đã đọc "
+                    f"chắc chắn số điện thoại {phone}, nhưng chưa đọc "
+                    "được mã đơn."
+                ),
+                reply,
+            )
+            return
 
         if not phone or not order_code or not confident:
             fallback = (
@@ -687,7 +863,7 @@ def process_image(
                 chat_id,
                 (
                     f"Đã đọc và xác minh được đơn {order_code}, "
-                    f"số điện thoại đã che {_mask_phone(phone)}. "
+                    f"số điện thoại {_mask_phone(phone)}. "
                     "Cần yêu cầu khách xác nhận kích hoạt hoặc hủy; "
                     "chưa được nói đã kích hoạt."
                 ),

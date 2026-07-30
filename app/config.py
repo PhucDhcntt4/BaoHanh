@@ -13,6 +13,9 @@ PRODUCT_IMAGE_REQUEST_PROMPT_PATH = (
     PROMPT_DIR / "product_image_request.txt"
 )
 WARRANTY_POLICY_PATH = PROMPT_DIR / "warranty_policy.txt"
+IMAGE_ORDER_EXTRACTION_PROMPT_PATH = (
+    PROMPT_DIR / "image_order_extraction.txt"
+)
 PRODUCTS_PATH = PROJECT_ROOT / "products.json"
 IMAGE_INTENT_PROMPT_PATH = PROMPT_DIR / "image_intent.txt"
 PRODUCT_RECOGNITION_PROMPT_PATH = (

@@ -14,10 +14,10 @@ class ProductCatalogService:
     ) -> None:
         self.path = Path(path)
         self._products = self._load()
-        self._by_code: dict[str, dict[str, Any]] = {}
+        self._by_code: dict[str, list[dict[str, Any]]] = {}
         for product in self._products:
             for code in self.product_codes(product):
-                self._by_code[code] = product
+                self._by_code.setdefault(code, []).append(product)
 
     def _load(self) -> list[dict[str, Any]]:
         data = json.loads(
@@ -122,7 +122,17 @@ class ProductCatalogService:
         return references
 
     def get(self, product_code: str) -> dict[str, Any] | None:
-        return self._by_code.get(product_code.strip().upper())
+        products = self.get_all(product_code)
+        return products[0] if products else None
+
+    def get_all(
+        self,
+        product_code: str,
+    ) -> list[dict[str, Any]]:
+        return self._by_code.get(
+            product_code.strip().upper(),
+            [],
+        )
 
     @staticmethod
     def _normalize_search_text(value: Any) -> str:
@@ -171,6 +181,7 @@ class ProductCatalogService:
             if token not in stop_words and len(token) >= 2
         }
         scored_products = []
+        scored_codes: set[str] = set()
 
         for product in self._products:
             if (
@@ -204,9 +215,13 @@ class ProductCatalogService:
                 continue
 
             code = self.product_code(product)
+            if not code or code in scored_codes:
+                continue
+
             info = self.public_info(code)
             if info:
                 scored_products.append((score, info))
+                scored_codes.add(code)
 
         scored_products.sort(
             key=lambda item: item[0],
@@ -221,11 +236,20 @@ class ProductCatalogService:
         self,
         product_code: str,
     ) -> dict[str, Any] | None:
-        product = self.get(product_code)
-        if not product:
+        related_products = self.get_all(product_code)
+        if not related_products:
             return None
 
-        variants = product.get("variants", {}).get("nodes", [])
+        product = related_products[0]
+        variants = [
+            variant
+            for related_product in related_products
+            for variant in (
+                related_product
+                .get("variants", {})
+                .get("nodes", [])
+            )
+        ]
         prices = sorted(
             {
                 int(float(item["price"]))
@@ -273,9 +297,13 @@ class ProductCatalogService:
             )
 
         colors = []
-        for option in product.get("options", []):
-            if str(option.get("name", "")).casefold() == "color":
-                colors.extend(str(value) for value in option.get("values", []))
+        for related_product in related_products:
+            for option in related_product.get("options", []):
+                if str(option.get("name", "")).casefold() == "color":
+                    colors.extend(
+                        str(value)
+                        for value in option.get("values", [])
+                    )
 
         description = str(product.get("description") or "")
         description_color_match = re.search(
@@ -290,28 +318,82 @@ class ProductCatalogService:
                 if color.strip()
             )
 
+        def description_spec(label: str) -> str | None:
+            match = re.search(
+                rf"-\s*(?:{label})\s*:\s*([^-]+)",
+                description,
+                flags=re.IGNORECASE,
+            )
+            if not match:
+                return None
+            value = match.group(1).strip()
+            return value or None
+
+        material = description_spec(r"Chất liệu")
+        sole = description_spec(r"Đế")
+        height = description_spec(r"Cao|Chiều cao")
+
         normalized_code = product_code.strip().upper()
 
         image_urls = []
+        image_urls_by_color: dict[str, list[str]] = {}
+
+        for related_product in related_products:
+            product_images = []
+            related_featured_image = (
+                related_product.get("featuredImage") or {}
+            ).get("url")
+
+            if related_featured_image:
+                product_images.append(
+                    str(related_featured_image)
+                )
+
+            for image in (
+                related_product
+                .get("images", {})
+                .get("nodes", [])
+            ):
+                image_url = image.get("url")
+                if (
+                    image_url
+                    and image_url not in product_images
+                ):
+                    product_images.append(str(image_url))
+
+            product_colors = []
+            for option in related_product.get("options", []):
+                if str(option.get("name", "")).casefold() == "color":
+                    product_colors.extend(
+                        str(value)
+                        for value in option.get("values", [])
+                    )
+
+            for color in product_colors:
+                existing_images = image_urls_by_color.setdefault(
+                    color,
+                    [],
+                )
+                for image_url in product_images:
+                    if image_url not in existing_images:
+                        existing_images.append(image_url)
+
+            for image_url in product_images:
+                if image_url not in image_urls:
+                    image_urls.append(image_url)
 
         featured_image = (
             product.get("featuredImage") or {}
         ).get("url")
-
-        if featured_image:
-            image_urls.append(str(featured_image))
-
-        for image in product.get("images", {}).get("nodes", []):
-            image_url = image.get("url")
-
-            if image_url and image_url not in image_urls:
-                image_urls.append(str(image_url))
 
         return {
             "product_code": normalized_code,
             "product_name": product.get("title"),
             "product_type": product.get("productType"),
             "description": description,
+            "material": material,
+            "sole": sole,
+            "height": height,
             "status": product.get("status"),
             "prices": prices,
             "colors": list(dict.fromkeys(colors)),
@@ -319,5 +401,9 @@ class ProductCatalogService:
             "availability_by_color": availability_by_color,
             "featured_image": featured_image,
             "image_urls": image_urls[:4],
+            "image_urls_by_color": {
+                color: urls[:4]
+                for color, urls in image_urls_by_color.items()
+            },
             "handle": product.get("handle"),
         }
