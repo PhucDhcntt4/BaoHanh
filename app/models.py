@@ -1,5 +1,5 @@
 from typing import Literal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field # type: ignore
 
 class ChatHistoryItem(BaseModel):
     role: Literal["user","model"]
@@ -28,7 +28,20 @@ class WarrantyMessageRequest(BaseModel):
         description="Lịch sử hội thoại trước tin nhắn hiện tại",
     )
 
-
 class WarrantyMessageResponse(BaseModel):
     status: str
     message: str
+
+class ImageOrderInfo(BaseModel):
+    phone: str | None = None
+    order_code: str | None = None
+    phone_confident: bool = False
+    order_code_confident: bool = False
+
+
+class ConfirmationIntent(BaseModel):
+    intent: Literal["confirm", "cancel", "unknown"]
+
+
+class ProductImageRequestIntent(BaseModel):
+    intent: Literal["request_images", "not_request_images"]

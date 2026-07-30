@@ -3,6 +3,10 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
-.data/
 prompts/*
 !prompts/.gitkeep
+# Ignore data
+data/
+
+# Ignore products
+products.json

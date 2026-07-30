@@ -1,10 +1,23 @@
+import json
 import os
 from typing import Any
 
 from google import genai
 from google.genai import types # type: ignore
 
-from app.config import WARRANTY_PROMPT_PATH
+from app.config import (
+    CONFIRMATION_PROMPT_PATH,
+    PRODUCT_IMAGE_REQUEST_PROMPT_PATH,
+    WARRANTY_PROMPT_PATH,
+)
+from app.models import (
+    ConfirmationIntent,
+    ProductImageRequestIntent,
+)
+from app.product_recognition.product_tools import (
+    get_product_info,
+    search_products,
+)
 from app.services.warranty_tools import (
     activate_warranty,
     search_order,
@@ -39,10 +52,36 @@ class GeminiService:
             encoding="utf-8"
         )
 
+        if not CONFIRMATION_PROMPT_PATH.exists():
+            raise RuntimeError(
+                "Không tìm thấy prompt phân loại xác nhận: "
+                f"{CONFIRMATION_PROMPT_PATH}"
+            )
+
+        self.confirmation_prompt = (
+            CONFIRMATION_PROMPT_PATH.read_text(
+                encoding="utf-8"
+            )
+        )
+
+        if not PRODUCT_IMAGE_REQUEST_PROMPT_PATH.exists():
+            raise RuntimeError(
+                "KhĂ´ng tĂ¬m tháº¥y prompt phĂ¢n loáº¡i yĂªu cáº§u áº£nh: "
+                f"{PRODUCT_IMAGE_REQUEST_PROMPT_PATH}"
+            )
+
+        self.product_image_request_prompt = (
+            PRODUCT_IMAGE_REQUEST_PROMPT_PATH.read_text(
+                encoding="utf-8"
+            )
+        )
+
         self.tools = [
             search_warranty_policy,
             search_order,
             activate_warranty,
+            search_products,
+            get_product_info,
         ]
 
     def chat(
@@ -95,6 +134,125 @@ class GeminiService:
             "success": True,
             "reply": reply.strip(),
         }
+
+    def compose_reply(
+        self,
+        event: str,
+        history: list[dict[str, Any]] | None = None,
+    ) -> str:
+        """
+        Viết câu trả lời tự nhiên từ một kết quả nghiệp vụ đã được
+        Python xác minh. Hàm này không đăng ký tools nên không thể
+        tự tìm đơn hoặc kích hoạt lại.
+        """
+
+        contents: list[types.Content] = []
+
+        if history:
+            for item in history:
+                role = item.get("role")
+                text = item.get("text", "")
+
+                if role in {"user", "model"} and text:
+                    contents.append(
+                        types.Content(
+                            role=role,
+                            parts=[
+                                types.Part.from_text(text=text)
+                            ],
+                        )
+                    )
+
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part.from_text(
+                        text=(
+                            "KẾT QUẢ NGHIỆP VỤ ĐÃ ĐƯỢC HỆ THỐNG "
+                            "XÁC MINH:\n"
+                            f"{event}\n\n"
+                            "Hãy viết một câu trả lời ngắn gọn, tự "
+                            "nhiên bằng tiếng Việt cho khách hàng. "
+                            "Chỉ dùng dữ liệu trên, không tự thêm "
+                            "thông tin và không mô tả kỹ thuật."
+                        )
+                    )
+                ],
+            )
+        )
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=self.system_prompt,
+                temperature=0.3,
+            ),
+        )
+
+        if not response.text:
+            raise RuntimeError("Gemini không tạo được câu trả lời")
+
+        return response.text.strip()
+
+    def classify_confirmation_intent(
+        self,
+        message: str,
+    ) -> str:
+        """
+        Phân loại câu trả lời khi có yêu cầu kích hoạt đang chờ.
+        Các cách diễn đạt được quản lý trong prompt, không nằm
+        trong danh sách từ khóa Python.
+        """
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=message,
+            config=types.GenerateContentConfig(
+                system_instruction=self.confirmation_prompt,
+                response_mime_type="application/json",
+                temperature=0,
+            ),
+        )
+
+        if not response.text:
+            return "unknown"
+
+        try:
+            parsed = ConfirmationIntent.model_validate(
+                json.loads(response.text)
+            )
+        except (json.JSONDecodeError, ValueError):
+            return "unknown"
+
+        return parsed.intent
+
+    def classify_product_image_request(
+        self,
+        message: str,
+    ) -> bool:
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=message,
+            config=types.GenerateContentConfig(
+                system_instruction=self.product_image_request_prompt,
+                response_mime_type="application/json",
+                temperature=0,
+            ),
+        )
+
+        if not response.text:
+            return False
+
+        try:
+            parsed = ProductImageRequestIntent.model_validate(
+                json.loads(response.text)
+            )
+        except (json.JSONDecodeError, ValueError):
+            return False
+
+        return parsed.intent == "request_images"
 
     def _build_contents(
         self,
