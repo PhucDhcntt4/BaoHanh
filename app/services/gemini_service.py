@@ -18,6 +18,14 @@ from app.product_recognition.product_tools import (
     get_product_info,
     search_products,
 )
+from app.product_recognition.handler import ProductImageHandler
+from app.product_recognition.image_intent_service import (
+    ImageIntentService,
+)
+from app.services.AI.base import AIService
+from app.services.image_extraction_service import (
+    ImageExtractionService,
+)
 from app.services.warranty_tools import (
     activate_warranty,
     search_order,
@@ -25,7 +33,9 @@ from app.services.warranty_tools import (
 )
 
 
-class GeminiService:
+class GeminiService(AIService):
+    provider_name = "gemini"
+
     def __init__(self) -> None:
         api_key = os.getenv("GEMINI_API_KEY")
 
@@ -83,6 +93,18 @@ class GeminiService:
             search_products,
             get_product_info,
         ]
+        self.image_extraction_service = ImageExtractionService(
+            client=self.client,
+            model=self.model,
+        )
+        self.image_intent_service = ImageIntentService(
+            client=self.client,
+            model=self.model,
+        )
+        self.product_image_handler = ProductImageHandler(
+            client=self.client,
+            model=self.model,
+        )
 
     def chat(
         self,
@@ -253,6 +275,40 @@ class GeminiService:
             return False
 
         return parsed.intent == "request_images"
+
+    def classify_image_intent(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        caption: str | None = None,
+    ) -> dict[str, str]:
+        return self.image_intent_service.classify(
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            caption=caption,
+        )
+
+    def extract_order_from_image(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+    ) -> dict[str, Any]:
+        return self.image_extraction_service.extract(
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+        )
+
+    def handle_product_image(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        product_type: str = "unknown",
+    ) -> dict[str, Any]:
+        return self.product_image_handler.handle(
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            product_type=product_type,
+        )
 
     def _build_contents(
         self,

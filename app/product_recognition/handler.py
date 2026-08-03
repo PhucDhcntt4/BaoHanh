@@ -35,11 +35,29 @@ class ProductImageHandler:
         self,
         image_bytes: bytes,
         mime_type: str,
+        product_type: str = "unknown",
     ) -> dict:
         recognition = self.recognition.recognize(
             image_bytes=image_bytes,
             mime_type=mime_type,
+            product_type=product_type,
         )
+
+        # Bộ phân loại nhanh có thể nhầm giữa giày, dép, sandal và
+        # sapo. Nếu danh sách đã lọc không cho kết quả đủ tin cậy,
+        # thử lại bằng tập tham chiếu rộng hơn trước khi báo thất bại.
+        if (
+            product_type != "unknown"
+            and not any(
+                candidate.confidence >= 0.70
+                for candidate in recognition.candidates
+            )
+        ):
+            recognition = self.recognition.recognize(
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                product_type="unknown",
+            )
         candidates = []
 
         for candidate in recognition.candidates:

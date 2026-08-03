@@ -1,3 +1,4 @@
+
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -9,7 +10,21 @@ class ImageIntent(BaseModel):
         "product_lookup",
         "unknown",
     ]
+    product_type: Literal[
+        "tui",
+        "giay",
+        "sandal",
+        "dep",
+        "unknown",
+    ] = "unknown"
 
+    product_type: Literal[
+        "tui",
+        "giay",
+        "sandal",
+        "dep",
+        "unknown",
+    ] = "unknown"
 
 class ProductCandidate(BaseModel):
     product_code: str

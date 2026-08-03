@@ -1,11 +1,39 @@
+import logging
 import os
 import re
+import time
 from typing import Any
 
 import requests
 
 
+logger = logging.getLogger("uvicorn.error")
+
+
 class TelegramService:
+    @staticmethod
+    def _plain_text(text: str) -> str:
+        """Loại bỏ Markdown cơ bản vì Telegram đang gửi plain text."""
+
+        cleaned = re.sub(
+            r"\*\*(.+?)\*\*",
+            r"\1",
+            str(text),
+            flags=re.DOTALL,
+        )
+        cleaned = re.sub(
+            r"__(.+?)__",
+            r"\1",
+            cleaned,
+            flags=re.DOTALL,
+        )
+        cleaned = re.sub(
+            r"(?m)^\s*\*\s+",
+            "• ",
+            cleaned,
+        )
+        return cleaned
+
     def __init__(self) -> None:
         token = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -31,24 +59,41 @@ class TelegramService:
         chat_id: int | str,
         text: str,
     ) -> dict[str, Any]:
-
-        response = requests.post(
-            f"{self.base_url}/sendMessage",
-            json={
-                "chat_id": chat_id,
-                "text": text,
-            },
-            timeout=30,
-        )
-
-        response.raise_for_status()
-        result = response.json()
-
-        if not result.get("ok"):
-            raise RuntimeError(
-                f"Telegram sendMessage failed: {result}"
+        text = self._plain_text(text)
+        started_at = time.perf_counter()
+        try:
+            response = requests.post(
+                f"{self.base_url}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": text,
+                },
+                timeout=30,
             )
-        return result
+
+            response.raise_for_status()
+            result = response.json()
+
+            if not result.get("ok"):
+                raise RuntimeError(
+                    f"Telegram sendMessage failed: {result}"
+                )
+
+            logger.info(
+                "TELEGRAM SENT type=message chat_id=%s "
+                "success=true time=%.3fs",
+                chat_id,
+                time.perf_counter() - started_at,
+            )
+            return result
+        except Exception:
+            logger.exception(
+                "TELEGRAM SENT type=message chat_id=%s "
+                "success=false time=%.3fs",
+                chat_id,
+                time.perf_counter() - started_at,
+            )
+            raise
 
     def send_typing(
         self,
@@ -120,6 +165,7 @@ class TelegramService:
         if caption:
             payload["caption"] = caption[:1024]
 
+        started_at = time.perf_counter()
         response = requests.post(
             f"{self.base_url}/sendPhoto",
             json=payload,
@@ -134,6 +180,12 @@ class TelegramService:
                 f"Telegram sendPhoto failed: {result}"
             )
 
+        logger.info(
+            "TELEGRAM SENT type=photo chat_id=%s "
+            "success=true time=%.3fs",
+            chat_id,
+            time.perf_counter() - started_at,
+        )
         return result
 
     def send_media_group(
@@ -165,6 +217,7 @@ class TelegramService:
             for photo_url in unique_urls[:10]
         ]
 
+        started_at = time.perf_counter()
         response = requests.post(
             f"{self.base_url}/sendMediaGroup",
             json={
@@ -187,4 +240,11 @@ class TelegramService:
                 f"{result.get('description', 'unknown error')}"
             )
 
+        logger.info(
+            "TELEGRAM SENT type=album chat_id=%s images=%s "
+            "success=true time=%.3fs",
+            chat_id,
+            len(media),
+            time.perf_counter() - started_at,
+        )
         return result.get("result", [])

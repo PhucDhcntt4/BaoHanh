@@ -14,14 +14,7 @@ from fastapi import ( # type: ignore
     Request,
 )
 
-from app.product_recognition.handler import ProductImageHandler
-from app.product_recognition.image_intent_service import (
-    ImageIntentService,
-)
-from app.services.gemini_service import GeminiService
-from app.services.image_extraction_service import (
-    ImageExtractionService,
-)
+from app.services.AI.base import AIService
 from app.services.order_service import (
     OrderService,
     normalize_phone,
@@ -41,13 +34,10 @@ router = APIRouter(
     tags=["Telegram"],
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
-gemini_service: GeminiService | None = None
+ai_service: AIService | None = None
 telegram_service: TelegramService | None = None
-image_extraction_service: ImageExtractionService | None = None
-image_intent_service: ImageIntentService | None = None
-product_image_handler: ProductImageHandler | None = None
 order_service = OrderService()
 
 _state_lock = threading.Lock()
@@ -60,33 +50,17 @@ _PENDING_TTL_SECONDS = 10 * 60
 
 
 def configure_telegram(
-    warranty_agent: GeminiService,
+    warranty_agent: AIService,
 ) -> None:
-    global gemini_service, telegram_service, image_extraction_service
-    global image_intent_service, product_image_handler
-    gemini_service = warranty_agent
+    global ai_service, telegram_service
+    ai_service = warranty_agent
     telegram_service = TelegramService()
-    image_extraction_service = ImageExtractionService(
-        client=warranty_agent.client,
-        model=warranty_agent.model,
-    )
-    image_intent_service = ImageIntentService(
-        client=warranty_agent.client,
-        model=warranty_agent.model,
-    )
-    product_image_handler = ProductImageHandler(
-        client=warranty_agent.client,
-        model=warranty_agent.model,
-    )
 
 
 def telegram_ready() -> bool:
     return (
-        gemini_service is not None
+        ai_service is not None
         and telegram_service is not None
-        and image_extraction_service is not None
-        and image_intent_service is not None
-        and product_image_handler is not None
     )
 
 
@@ -177,11 +151,11 @@ def _agent_reply(
     event: str,
     fallback: str,
 ) -> str:
-    if gemini_service is None:
+    if ai_service is None:
         return fallback
 
     try:
-        return gemini_service.compose_reply(
+        return ai_service.compose_reply(
             event=event,
             history=_get_history(chat_id),
         )
@@ -317,10 +291,10 @@ def _send_product_photos(
         if already_shown and not force:
             if not resend_checked:
                 resend_checked = True
-                if gemini_service is not None and user_message:
+                if ai_service is not None and user_message:
                     try:
                         resend_requested = (
-                            gemini_service.classify_product_image_request(
+                            ai_service.classify_product_image_request(
                                 user_message
                             )
                         )
@@ -423,19 +397,25 @@ def process_message(
     chat_id: int,
     text: str,
 ) -> None:
+    started_at = time.perf_counter()
+    ai_seconds = 0.0
+    status = "completed"
+
     try:
         if not telegram_ready():
             raise RuntimeError("Telegram service chưa sẵn sàng")
 
         assert telegram_service is not None
-        assert gemini_service is not None
+        assert ai_service is not None
 
         pending = _peek_pending_activation(chat_id)
-        confirmation_intent = (
-            gemini_service.classify_confirmation_intent(text)
-            if pending
-            else "unknown"
-        )
+        confirmation_intent = "unknown"
+        if pending:
+            ai_started_at = time.perf_counter()
+            confirmation_intent = (
+                ai_service.classify_confirmation_intent(text)
+            )
+            ai_seconds += time.perf_counter() - ai_started_at
 
         if confirmation_intent == "cancel":
             cancelled = _cancel_pending_activation(chat_id)
@@ -530,11 +510,13 @@ def process_message(
 
         telegram_service.send_typing(chat_id)
 
-        result = gemini_service.chat(
+        ai_started_at = time.perf_counter()
+        result = ai_service.chat(
             message=text,
             customer_id=f"telegram:{chat_id}",
             history=_get_history(chat_id),
         )
+        ai_seconds += time.perf_counter() - ai_started_at
 
         reply = result.get("reply")
 
@@ -557,6 +539,7 @@ def process_message(
         _append_history(chat_id, text, reply)
 
     except Exception:
+        status = "error"
         logger.exception(
             "TELEGRAM MESSAGE ERROR chat_id=%s",
             chat_id,
@@ -575,24 +558,51 @@ def process_message(
                 "Không thể gửi thông báo lỗi về Telegram"
             )
 
+    finally:
+        logger.info(
+            "BOT RESPONSE chat_id=%s status=%s "
+            "provider=%s model=%s ai=%.3fs total=%.3fs",
+            chat_id,
+            status,
+            (
+                ai_service.provider_name
+                if ai_service is not None
+                else "unknown"
+            ),
+            (
+                ai_service.model
+                if ai_service is not None
+                else "unknown"
+            ),
+            ai_seconds,
+            time.perf_counter() - started_at,
+        )
+
 
 def process_image(
     chat_id: int,
     file_id: str,
     caption: str | None = None,
 ) -> None:
+    started_at = time.perf_counter()
+    download_seconds = 0.0
+    ai_seconds = 0.0
+    status = "completed"
+
     try:
         if not telegram_ready():
             raise RuntimeError("Telegram service chưa sẵn sàng")
 
         assert telegram_service is not None
-        assert image_extraction_service is not None
-        assert image_intent_service is not None
-        assert product_image_handler is not None
+        assert ai_service is not None
 
         telegram_service.send_typing(chat_id)
+        download_started_at = time.perf_counter()
         image_bytes, file_path = telegram_service.download_file(
             file_id
+        )
+        download_seconds = (
+            time.perf_counter() - download_started_at
         )
 
         extension = os.path.splitext(file_path)[1].lower()
@@ -611,17 +621,31 @@ def process_image(
             )
             return
 
-        image_intent = image_intent_service.classify(
+        ai_started_at = time.perf_counter()
+        intent_result = ai_service.classify_image_intent(
             image_bytes=image_bytes,
             mime_type=mime_type,
             caption=caption,
         )
+        ai_seconds += time.perf_counter() - ai_started_at
+        image_intent = intent_result.get(
+            "intent",
+            "unknown",
+        )
+        product_type = intent_result.get(
+            "product_type",
+            "unknown",
+        )
+        status = image_intent
 
         if image_intent == "product_lookup":
-            product_result = product_image_handler.handle(
+            ai_started_at = time.perf_counter()
+            product_result = ai_service.handle_product_image(
                 image_bytes=image_bytes,
                 mime_type=mime_type,
+                product_type=product_type,
             )
+            ai_seconds += time.perf_counter() - ai_started_at
             reply = product_result["reply"]
             telegram_service.send_message(chat_id, reply)
             product_codes = product_result.get(
@@ -660,10 +684,12 @@ def process_image(
             )
             return
 
-        extracted = image_extraction_service.extract(
+        ai_started_at = time.perf_counter()
+        extracted = ai_service.extract_order_from_image(
             image_bytes=image_bytes,
             mime_type=mime_type,
         )
+        ai_seconds += time.perf_counter() - ai_started_at
         phone = extracted.get("phone")
         masked_phone = extracted.get("masked_phone")
         order_code = extracted.get("order_code")
@@ -872,6 +898,7 @@ def process_image(
         )
 
     except Exception:
+        status = "error"
         logger.exception(
             "TELEGRAM IMAGE ERROR chat_id=%s",
             chat_id,
@@ -889,6 +916,28 @@ def process_image(
                 logger.exception(
                     "Không thể gửi lỗi xử lý ảnh về Telegram"
                 )
+
+    finally:
+        logger.info(
+            "BOT IMAGE RESPONSE chat_id=%s status=%s "
+            "provider=%s model=%s download=%.3fs "
+            "ai=%.3fs total=%.3fs",
+            chat_id,
+            status,
+            (
+                ai_service.provider_name
+                if ai_service is not None
+                else "unknown"
+            ),
+            (
+                ai_service.model
+                if ai_service is not None
+                else "unknown"
+            ),
+            download_seconds,
+            ai_seconds,
+            time.perf_counter() - started_at,
+        )
 
 
 @router.post("/webhook")

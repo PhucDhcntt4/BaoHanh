@@ -24,7 +24,7 @@ class ImageIntentService:
         image_bytes: bytes,
         mime_type: str,
         caption: str | None = None,
-    ) -> str:
+    ) -> dict[str, str]:
         response = self.client.models.generate_content(
             model=self.model,
             contents=[
@@ -41,11 +41,20 @@ class ImageIntentService:
             ),
         )
         if not response.text:
-            return "unknown"
+            return {
+                "intent": "unknown",
+                "product_type": "unknown",
+            }
         try:
             result = ImageIntent.model_validate(
                 json.loads(response.text)
             )
         except (json.JSONDecodeError, ValueError):
-            return "unknown"
-        return result.intent
+            return {
+                "intent": "unknown",
+                "product_type": "unknown",
+            }
+        return {
+            "intent": result.intent,
+            "product_type": result.product_type,
+        }

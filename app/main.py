@@ -8,7 +8,8 @@ from app.models import (
     WarrantyMessageRequest,
     WarrantyMessageResponse,
 )
-from app.services.gemini_service import GeminiService
+from app.services.AI.base import AIService
+from app.services.AI.factory import create_ai_service
 
 
 load_dotenv()
@@ -19,22 +20,26 @@ from app.routes.telegram_router import (  # noqa: E402
     telegram_ready,
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("uvicorn.error")
 
 
-gemini_service: GeminiService | None = None
+ai_service: AIService | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global gemini_service
+    global ai_service
 
     try:
-        gemini_service = GeminiService()
-        logger.info("Gemini Warranty Agent is ready")
+        ai_service = create_ai_service()
+        logger.info(
+            "AI service is ready provider=%s model=%s",
+            ai_service.provider_name,
+            ai_service.model,
+        )
 
         try:
-            configure_telegram(gemini_service)
+            configure_telegram(ai_service)
             logger.info("Telegram Bot is ready")
         except Exception as error:
             logger.exception(
@@ -43,7 +48,7 @@ async def lifespan(app: FastAPI):
             )
 
     except Exception as error:
-        gemini_service = None
+        ai_service = None
         logger.exception(
             "Gemini Agent initialization failed: %s",
             error,
@@ -64,7 +69,11 @@ app.include_router(telegram_router)
 def health():
     return {
         "status": "ok",
-        "gemini_ready": gemini_service is not None,
+        "ai_ready": ai_service is not None,
+        "ai_provider": (
+            ai_service.provider_name if ai_service else None
+        ),
+        "ai_model": ai_service.model if ai_service else None,
         "telegram_ready": telegram_ready(),
     }
 
@@ -76,7 +85,7 @@ def health():
 def handle_warranty_message(
     data: WarrantyMessageRequest,
 ):
-    if gemini_service is None:
+    if ai_service is None:
         raise HTTPException(
             status_code=503,
             detail="Gemini Agent chưa sẵn sàng",
@@ -88,7 +97,7 @@ def handle_warranty_message(
             for item in data.history
         ]
 
-        result = gemini_service.chat(
+        result = ai_service.chat(
             message=data.message,
             customer_id=data.customer_id,
             history=history,

@@ -55,6 +55,7 @@ class ProductRecognitionService:
         self,
         image_bytes: bytes,
         mime_type: str,
+        product_type: str = "unknown",
     ) -> ProductRecognitionResult:
         contents: list = [
             self.prompt,
@@ -66,7 +67,18 @@ class ProductRecognitionService:
         ]
 
         valid_codes = set()
-        for reference in self.catalog.reference_products():
+        reference_limit = (
+            5 if product_type != "unknown"
+            else 8
+        )
+        for reference in self.catalog.reference_products(
+            product_type=(
+                None
+                if product_type == "unknown"
+                else product_type
+            ),
+            limit=reference_limit,
+        ):
             try:
                 reference_bytes, reference_mime = (
                     self._reference_image(reference["image_url"])

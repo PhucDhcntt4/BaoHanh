@@ -101,22 +101,65 @@ class ProductCatalogService:
 
     def reference_products(
         self,
-        limit: int = 20,
+        product_type: str | None = None,
+        limit: int = 5,
     ) -> list[dict[str, str]]:
         references = []
+        normalized_type = self._normalize_search_text(
+            product_type or ""
+        ).strip()
+        type_keywords = {
+            "tui": {"tui", "vi"},
+            # Sapo có hình dáng gần giày/dép nên cho phép xuất hiện
+            # ở cả hai nhóm để tránh loại nhầm trước khi AI nhận diện.
+            "giay": {"giay", "sapo"},
+            "sandal": {"sandal"},
+            "dep": {"dep", "sapo"},
+        }
+        accepted_keywords = type_keywords.get(
+            normalized_type,
+            set(),
+        )
+
+        referenced_codes: set[str] = set()
+
         for product in self._products:
             code = self.product_code(product)
             image_url = (
                 product.get("featuredImage") or {}
             ).get("url")
+
+            searchable_type = self._normalize_search_text(
+                " ".join([
+                    str(product.get("productType", "")),
+                    str(product.get("title", "")),
+                ])
+            )
+
+            if accepted_keywords and not any(
+                keyword in searchable_type
+                for keyword in accepted_keywords
+            ):
+                continue
+
+            # Một mã có thể có nhiều Shopify Product theo màu.
+            # Nhận diện kiểu dáng chỉ cần một ảnh đại diện cho mỗi mã,
+            # tránh để hai màu chiếm hai vị trí trong giới hạn.
+            if code in referenced_codes:
+                continue
+
             if code and image_url:
                 references.append(
                     {
                         "product_code": code,
                         "title": str(product.get("title", "")),
+                        "product_type": str(
+                            product.get("productType", "")
+                        ),
                         "image_url": str(image_url),
                     }
                 )
+                referenced_codes.add(code)
             if len(references) >= limit:
                 break
         return references
