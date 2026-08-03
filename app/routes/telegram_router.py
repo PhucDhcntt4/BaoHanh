@@ -46,6 +46,7 @@ _processed_updates: deque[int] = deque(maxlen=1000)
 _processed_update_set: set[int] = set()
 _pending_activations: dict[int, dict[str, Any]] = {}
 _shown_product_codes: dict[int, set[str]] = {}
+_active_product_codes: dict[int, list[str]] = {}
 _PENDING_TTL_SECONDS = 10 * 60
 
 
@@ -202,20 +203,114 @@ def _append_history(
         history.append({"role": "user", "text": user_text})
         history.append({"role": "model", "text": model_text})
 
+
+def _normalize_text(value: Any) -> str:
+    normalized = unicodedata.normalize(
+        "NFD", str(value or "").casefold()
+    )
+    return "".join(
+        character
+        for character in normalized
+        if unicodedata.category(character) != "Mn"
+    ).replace("đ", "d")
+
+
+def _remember_active_products(
+    chat_id: int,
+    product_codes: list[str],
+) -> None:
+    normalized_codes = list(dict.fromkeys(
+        str(code).strip().upper()
+        for code in product_codes
+        if str(code).strip()
+    ))
+    if normalized_codes:
+        with _state_lock:
+            _active_product_codes[chat_id] = normalized_codes[:3]
+
+
+def _active_products(chat_id: int) -> list[str]:
+    with _state_lock:
+        return list(_active_product_codes.get(chat_id, ()))
+
+
+def _requested_color_images(
+    user_message: str,
+    images_by_color: dict[str, list[str]],
+) -> tuple[str | None, list[str] | None]:
+    """Return the requested catalog color and its images."""
+    message = _normalize_text(user_message)
+    if not message or not images_by_color:
+        return None, None
+
+    alias_groups = (
+        {"kem", "trang kem", "be", "beige"},
+        {"den", "black"},
+        {"trang", "white"},
+        {"nau", "brown"},
+        {"do", "red"},
+        {"xanh", "blue", "green"},
+        {"vang", "yellow", "gold"},
+        {"xam", "ghi", "gray", "grey"},
+        {"hong", "pink"},
+    )
+    def contains_phrase(phrase: str, text: str) -> bool:
+        return bool(re.search(
+            rf"(?<!\w){re.escape(phrase)}(?!\w)",
+            text,
+        ))
+
+    requested_aliases: set[str] = set()
+    for aliases in alias_groups:
+        if any(contains_phrase(alias, message) for alias in aliases):
+            requested_aliases.update(aliases)
+
+    candidates: list[tuple[int, str, list[str]]] = []
+    for color, urls in images_by_color.items():
+        normalized_color = _normalize_text(color).strip()
+        if not normalized_color or not urls:
+            continue
+        if contains_phrase(normalized_color, message):
+            candidates.append(
+                (100 + len(normalized_color), str(color), urls)
+            )
+        elif requested_aliases and any(
+            alias in normalized_color
+            for alias in requested_aliases
+        ):
+            candidates.append(
+                (50 + len(normalized_color), str(color), urls)
+            )
+
+    if candidates:
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        _, selected_color, selected_urls = candidates[0]
+        return selected_color, selected_urls
+
+    # Empty string means a color was requested but has no matching album.
+    return ("", []) if requested_aliases else (None, None)
+
 def _send_product_photos(
     chat_id: int,
     reply: str,
     user_message: str = "",
     force: bool = False,
+    product_codes: list[str] | None = None,
 ) -> None:
     if telegram_service is None:
         return
 
     # Lấy các từ có khả năng là mã sản phẩm trong câu trả lời.
-    possible_codes = re.findall(
+    possible_codes = list(product_codes or []) + re.findall(
         r"\b[A-Za-z0-9]{3,20}\b",
         reply,
     )
+    possible_codes.extend(_active_products(chat_id))
+    possible_codes = list(dict.fromkeys(
+        str(code).strip().upper()
+        for code in possible_codes
+        if str(code).strip()
+    ))
 
     sent_codes: set[str] = set()
     sent_count = 0
@@ -240,34 +335,22 @@ def _send_product_photos(
 
         # Nếu khách yêu cầu một màu cụ thể, ưu tiên album của đúng
         # Shopify Product màu đó thay vì album mặc định của mã mẫu.
-        normalized_message = unicodedata.normalize(
-            "NFD",
-            str(user_message or "").casefold(),
+        selected_color, selected_urls = _requested_color_images(
+            user_message,
+            images_by_color,
         )
-        normalized_message = "".join(
-            character
-            for character in normalized_message
-            if unicodedata.category(character) != "Mn"
-        ).replace("đ", "d")
-
-        for color, color_urls in images_by_color.items():
-            normalized_color = unicodedata.normalize(
-                "NFD",
-                str(color).casefold(),
+        if selected_urls:
+            photo_urls = selected_urls
+        elif selected_color == "":
+            logger.info(
+                "PRODUCT IMAGE COLOR NOT FOUND chat_id=%s code=%s "
+                "message=%r available_colors=%s",
+                chat_id,
+                product_code,
+                user_message,
+                list(images_by_color),
             )
-            normalized_color = "".join(
-                character
-                for character in normalized_color
-                if unicodedata.category(character) != "Mn"
-            ).replace("đ", "d")
-
-            if (
-                normalized_color
-                and normalized_color in normalized_message
-                and color_urls
-            ):
-                photo_urls = color_urls
-                break
+            continue
 
         if not photo_urls and product.get("featured_image"):
             photo_urls = [product["featured_image"]]
@@ -352,6 +435,7 @@ def _send_product_photos(
             continue
 
         sent_codes.add(product_code)
+        _remember_active_products(chat_id, [product_code])
         sent_count += 1
         with _state_lock:
             _shown_product_codes.setdefault(
@@ -637,6 +721,12 @@ def process_image(
             "unknown",
         )
         status = image_intent
+        logger.info(
+            "IMAGE CLASSIFIED chat_id=%s intent=%s product_type=%s",
+            chat_id,
+            image_intent,
+            product_type,
+        )
 
         if image_intent == "product_lookup":
             ai_started_at = time.perf_counter()
@@ -652,7 +742,15 @@ def process_image(
                 "product_codes",
                 [],
             )
+            logger.info(
+                "PRODUCT RECOGNITION chat_id=%s product_type=%s "
+                "codes=%s",
+                chat_id,
+                product_type,
+                product_codes,
+            )
             if product_codes:
+                _remember_active_products(chat_id, product_codes)
                 _send_product_photos(
                     chat_id=chat_id,
                     reply=" ".join(
@@ -661,6 +759,7 @@ def process_image(
                     ),
                     user_message=caption or "",
                     force=True,
+                    product_codes=product_codes,
                 )
                 _append_history(
                     chat_id,

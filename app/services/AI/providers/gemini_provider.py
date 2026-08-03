@@ -18,6 +18,9 @@ from app.product_recognition.product_tools import (
     get_product_info,
     search_products,
 )
+from app.product_recognition.catalog_service import (
+    ProductCatalogService,
+)
 from app.product_recognition.handler import ProductImageHandler
 from app.product_recognition.image_intent_service import (
     ImageIntentService,
@@ -33,7 +36,7 @@ from app.services.warranty_tools import (
 )
 
 
-class GeminiService(AIService):
+class GeminiProvider(AIService):
     provider_name = "gemini"
 
     def __init__(self) -> None:
@@ -76,7 +79,7 @@ class GeminiService(AIService):
 
         if not PRODUCT_IMAGE_REQUEST_PROMPT_PATH.exists():
             raise RuntimeError(
-                "KhĂ´ng tĂ¬m tháº¥y prompt phĂ¢n loáº¡i yĂªu cáº§u áº£nh: "
+                "Không tìm thấy prompt phân loại yêu cầu ảnh: "
                 f"{PRODUCT_IMAGE_REQUEST_PROMPT_PATH}"
             )
 
@@ -93,6 +96,7 @@ class GeminiService(AIService):
             search_products,
             get_product_info,
         ]
+        self.catalog = ProductCatalogService()
         self.image_extraction_service = ImageExtractionService(
             client=self.client,
             model=self.model,
@@ -100,10 +104,12 @@ class GeminiService(AIService):
         self.image_intent_service = ImageIntentService(
             client=self.client,
             model=self.model,
+            catalog=self.catalog,
         )
         self.product_image_handler = ProductImageHandler(
             client=self.client,
             model=self.model,
+            catalog=self.catalog,
         )
 
     def chat(

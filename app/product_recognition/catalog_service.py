@@ -103,66 +103,117 @@ class ProductCatalogService:
         self,
         product_type: str | None = None,
         limit: int = 5,
-    ) -> list[dict[str, str]]:
-        references = []
-        normalized_type = self._normalize_search_text(
-            product_type or ""
-        ).strip()
-        type_keywords = {
-            "tui": {"tui", "vi"},
-            # Sapo có hình dáng gần giày/dép nên cho phép xuất hiện
-            # ở cả hai nhóm để tránh loại nhầm trước khi AI nhận diện.
-            "giay": {"giay", "sapo"},
-            "sandal": {"sandal"},
-            "dep": {"dep", "sapo"},
-        }
-        accepted_keywords = type_keywords.get(
-            normalized_type,
-            set(),
+        images_per_product: int = 3,
+    ) -> list[dict[str, Any]]:
+        references: list[dict[str, Any]] = []
+        canonical_type = self.resolve_product_type(
+            product_type
         )
+        if (
+            product_type
+            and product_type != "unknown"
+            and canonical_type is None
+        ):
+            return []
 
-        referenced_codes: set[str] = set()
+        normalized_type = self._normalize_search_text(
+            canonical_type or ""
+        ).strip()
+
+        references_by_code: dict[str, dict[str, Any]] = {}
 
         for product in self._products:
             code = self.product_code(product)
-            image_url = (
-                product.get("featuredImage") or {}
-            ).get("url")
-
             searchable_type = self._normalize_search_text(
-                " ".join([
-                    str(product.get("productType", "")),
-                    str(product.get("title", "")),
-                ])
-            )
+                product.get("productType", "")
+            ).strip()
 
-            if accepted_keywords and not any(
-                keyword in searchable_type
-                for keyword in accepted_keywords
-            ):
+            if normalized_type and searchable_type != normalized_type:
                 continue
 
             # Một mã có thể có nhiều Shopify Product theo màu.
             # Nhận diện kiểu dáng chỉ cần một ảnh đại diện cho mỗi mã,
             # tránh để hai màu chiếm hai vị trí trong giới hạn.
-            if code in referenced_codes:
+            if not code:
                 continue
 
-            if code and image_url:
-                references.append(
-                    {
-                        "product_code": code,
-                        "title": str(product.get("title", "")),
-                        "product_type": str(
-                            product.get("productType", "")
-                        ),
-                        "image_url": str(image_url),
-                    }
-                )
-                referenced_codes.add(code)
-            if len(references) >= limit:
+            reference = references_by_code.get(code)
+            if reference is None:
+                if len(references) >= limit:
+                    continue
+                reference = {
+                    "product_code": code,
+                    "title": str(product.get("title", "")),
+                    "product_type": str(product.get("productType", "")),
+                    "image_urls": [],
+                }
+                references_by_code[code] = reference
+                references.append(reference)
+
+            candidate_urls: list[str] = []
+            featured_url = (
+                product.get("featuredImage") or {}
+            ).get("url")
+            if featured_url:
+                candidate_urls.append(str(featured_url))
+            for image in product.get("images", {}).get("nodes", []):
+                image_url = image.get("url")
+                if image_url:
+                    candidate_urls.append(str(image_url))
+
+            image_urls = reference["image_urls"]
+            for image_url in candidate_urls:
+                if len(image_urls) >= images_per_product:
+                    break
+                if image_url not in image_urls:
+                    image_urls.append(image_url)
+
+            if len(references) >= limit and all(
+                len(item["image_urls"]) >= images_per_product
+                for item in references
+            ):
                 break
-        return references
+        return [item for item in references if item["image_urls"]]
+
+    def product_types(
+        self,
+        active_only: bool = True,
+    ) -> list[str]:
+        """Lấy danh sách productType thật và duy nhất từ catalog."""
+
+        values = {
+            str(product.get("productType") or "").strip()
+            for product in self._products
+            if (
+                product.get("productType")
+                and (
+                    not active_only
+                    or product.get("status") == "ACTIVE"
+                )
+            )
+        }
+        return sorted(value for value in values if value)
+
+    def resolve_product_type(
+        self,
+        value: str | None,
+        active_only: bool = True,
+    ) -> str | None:
+        """Xác minh và trả đúng cách viết productType trong catalog."""
+
+        normalized_value = self._normalize_search_text(
+            value or ""
+        ).strip()
+        if not normalized_value:
+            return None
+
+        valid_types = {
+            self._normalize_search_text(item).strip(): item
+            for item in self.product_types(
+                active_only=active_only
+            )
+        }
+        return valid_types.get(normalized_value)
 
     def get(self, product_code: str) -> dict[str, Any] | None:
         products = self.get_all(product_code)

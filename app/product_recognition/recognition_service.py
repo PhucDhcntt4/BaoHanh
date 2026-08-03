@@ -12,6 +12,9 @@ from app.product_recognition.catalog_service import (
 from app.product_recognition.models import (
     ProductRecognitionResult,
 )
+from app.services.product_image_store import (
+    ProductImageStore,
+)
 
 
 class ProductRecognitionService:
@@ -29,6 +32,7 @@ class ProductRecognitionService:
         )
         self._image_cache: dict[str, tuple[bytes, str]] = {}
         self._cache_lock = threading.Lock()
+        self.image_store = ProductImageStore()
 
     def _reference_image(
         self,
@@ -36,19 +40,38 @@ class ProductRecognitionService:
     ) -> tuple[bytes, str]:
         with self._cache_lock:
             cached = self._image_cache.get(url)
+
         if cached:
             return cached
 
-        response = requests.get(url, timeout=30)
+        local_image = self.image_store.get(url)
+
+        if local_image:
+            with self._cache_lock:
+                self._image_cache[url] = local_image
+
+            return local_image
+
+        response = requests.get(
+            url,
+            timeout=30,
+        )
+
         response.raise_for_status()
+
         content_type = response.headers.get(
             "Content-Type",
             "image/jpeg",
         ).split(";")[0]
-        result = (response.content, content_type)
+
+        result = (
+            response.content,
+            content_type,
+        )
 
         with self._cache_lock:
             self._image_cache[url] = result
+
         return result
 
     def recognize(
@@ -69,7 +92,7 @@ class ProductRecognitionService:
         valid_codes = set()
         reference_limit = (
             5 if product_type != "unknown"
-            else 8
+            else 15
         )
         for reference in self.catalog.reference_products(
             product_type=(
@@ -79,27 +102,30 @@ class ProductRecognitionService:
             ),
             limit=reference_limit,
         ):
-            try:
-                reference_bytes, reference_mime = (
-                    self._reference_image(reference["image_url"])
-                )
-            except requests.RequestException:
-                continue
-
             code = reference["product_code"]
-            valid_codes.add(code)
-            contents.extend(
-                [
+            loaded_images = 0
+            for image_index, image_url in enumerate(
+                reference["image_urls"], start=1
+            ):
+                try:
+                    reference_bytes, reference_mime = (
+                        self._reference_image(image_url)
+                    )
+                except requests.RequestException:
+                    continue
+                loaded_images += 1
+                contents.extend([
                     (
                         f"REFERENCE product_code={code}; "
-                        f"title={reference['title']}"
+                        f"title={reference['title']}; view={image_index}"
                     ),
                     types.Part.from_bytes(
                         data=reference_bytes,
                         mime_type=reference_mime,
                     ),
-                ]
-            )
+                ])
+            if loaded_images:
+                valid_codes.add(code)
 
         if not valid_codes:
             raise RuntimeError("Không tải được ảnh catalog")

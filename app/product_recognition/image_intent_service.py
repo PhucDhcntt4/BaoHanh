@@ -4,6 +4,9 @@ from google import genai
 from google.genai import types # type: ignore
 
 from app.config import IMAGE_INTENT_PROMPT_PATH
+from app.product_recognition.catalog_service import (
+    ProductCatalogService,
+)
 from app.product_recognition.models import ImageIntent
 
 
@@ -12,9 +15,11 @@ class ImageIntentService:
         self,
         client: genai.Client,
         model: str,
+        catalog: ProductCatalogService,
     ) -> None:
         self.client = client
         self.model = model
+        self.catalog = catalog
         self.prompt = IMAGE_INTENT_PROMPT_PATH.read_text(
             encoding="utf-8"
         )
@@ -25,6 +30,17 @@ class ImageIntentService:
         mime_type: str,
         caption: str | None = None,
     ) -> dict[str, str]:
+        product_types = self.catalog.product_types()
+        product_type_context = (
+            "Các productType hợp lệ trong catalog:\n"
+            + "\n".join(
+                f"- {product_type}"
+                for product_type in product_types
+            )
+            + "\n\nChỉ chọn đúng nguyên văn một giá trị trong "
+            "danh sách. Nếu không chắc, trả product_type=null."
+        )
+
         response = self.client.models.generate_content(
             model=self.model,
             contents=[
@@ -33,6 +49,7 @@ class ImageIntentService:
                     mime_type=mime_type,
                 ),
                 f"Caption khách gửi: {caption or '(không có)'}",
+                product_type_context,
             ],
             config=types.GenerateContentConfig(
                 system_instruction=self.prompt,
@@ -54,7 +71,14 @@ class ImageIntentService:
                 "intent": "unknown",
                 "product_type": "unknown",
             }
+        resolved_type = (
+            self.catalog.resolve_product_type(
+                result.product_type
+            )
+            if result.intent == "product_lookup"
+            else None
+        )
         return {
             "intent": result.intent,
-            "product_type": result.product_type,
+            "product_type": resolved_type or "unknown",
         }

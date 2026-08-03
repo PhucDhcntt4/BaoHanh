@@ -10,12 +10,16 @@ def create_ai_service() -> AIService:
     ).strip().lower()
 
     if provider == "gemini":
-        from app.services.gemini_service import GeminiService
+        from app.services.AI.providers.gemini_provider import (
+            GeminiProvider,
+        )
 
-        return GeminiService()
+        return GeminiProvider()
 
     if provider == "openai":
-        from app.services.AI.openai_provider import OpenAIProvider
+        from app.services.AI.providers.openai_provider import (
+            OpenAIProvider,
+        )
 
         return OpenAIProvider()
 

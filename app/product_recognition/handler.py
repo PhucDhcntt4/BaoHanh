@@ -18,10 +18,11 @@ class ProductImageHandler:
         self,
         client: genai.Client,
         model: str,
+        catalog: ProductCatalogService | None = None,
     ) -> None:
         self.client = client
         self.model = model
-        self.catalog = ProductCatalogService()
+        self.catalog = catalog or ProductCatalogService()
         self.recognition = ProductRecognitionService(
             client=client,
             model=model,

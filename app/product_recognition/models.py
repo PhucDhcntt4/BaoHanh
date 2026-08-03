@@ -10,21 +10,7 @@ class ImageIntent(BaseModel):
         "product_lookup",
         "unknown",
     ]
-    product_type: Literal[
-        "tui",
-        "giay",
-        "sandal",
-        "dep",
-        "unknown",
-    ] = "unknown"
-
-    product_type: Literal[
-        "tui",
-        "giay",
-        "sandal",
-        "dep",
-        "unknown",
-    ] = "unknown"
+    product_type: str | None = None
 
 class ProductCandidate(BaseModel):
     product_code: str

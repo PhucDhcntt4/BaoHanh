@@ -33,6 +33,7 @@ from app.product_recognition.product_tools import (
 )
 from app.services.AI.base import AIService
 from app.services.order_service import normalize_order_code, normalize_phone
+from app.services.product_image_store import ProductImageStore
 from app.services.warranty_tools import (
     activate_warranty,
     search_order,
@@ -76,6 +77,7 @@ class OpenAIProvider(AIService):
             PRODUCT_REPLY_PROMPT_PATH
         )
         self.catalog = ProductCatalogService()
+        self.image_store = ProductImageStore()
 
         self.tool_functions: dict[
             str, Callable[..., dict[str, Any]]
@@ -154,18 +156,35 @@ class OpenAIProvider(AIService):
         mime_type: str,
         caption: str | None = None,
     ) -> dict[str, str]:
+        product_types = self.catalog.product_types()
+        dynamic_instructions = (
+            self.image_intent_prompt
+            + "\n\nCác productType hợp lệ trong catalog:\n"
+            + "\n".join(
+                f"- {product_type}"
+                for product_type in product_types
+            )
+            + "\n\nChỉ chọn đúng nguyên văn một giá trị trong "
+            "danh sách. Nếu không chắc, trả product_type=null."
+        )
         parsed = self._parse_image(
             image_bytes=image_bytes,
             mime_type=mime_type,
-            instructions=self.image_intent_prompt,
+            instructions=dynamic_instructions,
             text=f"Caption: {caption or '(không có)'}",
             schema=ImageIntent,
         )
+        intent = parsed.intent if parsed else "unknown"
+        resolved_type = (
+            self.catalog.resolve_product_type(
+                parsed.product_type
+            )
+            if parsed and intent == "product_lookup"
+            else None
+        )
         return {
-            "intent": parsed.intent if parsed else "unknown",
-            "product_type": (
-                parsed.product_type if parsed else "unknown"
-            ),
+            "intent": intent,
+            "product_type": resolved_type or "unknown",
         }
 
     def extract_order_from_image(
@@ -220,7 +239,7 @@ class OpenAIProvider(AIService):
 
         reference_limit = (
             5 if product_type != "unknown"
-            else 8
+            else 15
         )
         for reference in self.catalog.reference_products(
             product_type=(
@@ -230,30 +249,38 @@ class OpenAIProvider(AIService):
             ),
             limit=reference_limit,
         ):
-            try:
-                response = requests.get(
-                    reference["image_url"],
-                    timeout=30,
-                )
-                response.raise_for_status()
-            except requests.RequestException:
-                continue
-
             code = reference["product_code"]
-            valid_codes.add(code)
-            reference_mime = response.headers.get(
-                "Content-Type", "image/jpeg"
-            ).split(";")[0]
-            content.extend([
-                {
-                    "type": "input_text",
-                    "text": (
-                        f"REFERENCE product_code={code}; "
-                        f"title={reference['title']}"
-                    ),
-                },
-                self._image_item(response.content, reference_mime),
-            ])
+            loaded_images = 0
+            for image_index, image_url in enumerate(
+                reference["image_urls"], start=1
+            ):
+                try:
+                    local_image = self.image_store.get(image_url)
+                    if local_image:
+                        reference_bytes, reference_mime = local_image
+                    else:
+                        response = requests.get(image_url, timeout=30)
+                        response.raise_for_status()
+                        reference_bytes = response.content
+                        reference_mime = response.headers.get(
+                            "Content-Type", "image/jpeg"
+                        ).split(";")[0]
+                except requests.RequestException:
+                    continue
+                loaded_images += 1
+                content.extend([
+                    {
+                        "type": "input_text",
+                        "text": (
+                            f"REFERENCE product_code={code}; "
+                            f"title={reference['title']}; "
+                            f"view={image_index}"
+                        ),
+                    },
+                    self._image_item(reference_bytes, reference_mime),
+                ])
+            if loaded_images:
+                valid_codes.add(code)
 
         response = self.client.responses.parse(
             model=self.model,

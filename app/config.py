@@ -22,3 +22,9 @@ PRODUCT_RECOGNITION_PROMPT_PATH = (
     PROMPT_DIR / "product_recognition.txt"
 )
 PRODUCT_REPLY_PROMPT_PATH = PROMPT_DIR / "product_reply.txt"
+
+PRODUCT_IMAGE_DIR = DATA_DIR / "product_images"
+
+PRODUCT_IMAGE_MANIFEST_PATH = (
+    PRODUCT_IMAGE_DIR / "manifest.json"
+)
