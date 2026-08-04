@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 
 from google import genai
@@ -11,6 +12,12 @@ from app.product_recognition.catalog_service import (
 from app.product_recognition.recognition_service import (
     ProductRecognitionService,
 )
+from app.product_recognition.models import (
+    MIN_PRODUCT_MATCH_CONFIDENCE,
+)
+
+
+logger = logging.getLogger("uvicorn.error")
 
 
 class ProductImageHandler:
@@ -50,7 +57,7 @@ class ProductImageHandler:
         if (
             product_type != "unknown"
             and not any(
-                candidate.confidence >= 0.70
+                candidate.confidence >= MIN_PRODUCT_MATCH_CONFIDENCE
                 for candidate in recognition.candidates
             )
         ):
@@ -60,9 +67,46 @@ class ProductImageHandler:
                 product_type="unknown",
             )
         candidates = []
+        verification_candidates = sorted(
+            (
+                candidate
+                for candidate in recognition.candidates
+                if candidate.confidence >= 0.70
+            ),
+            key=lambda item: item.confidence,
+            reverse=True,
+        )[:3]
+        logger.info(
+            "PRODUCT CANDIDATES values=%s",
+            [
+                {
+                    "code": candidate.product_code,
+                    "confidence": candidate.confidence,
+                    "reason": candidate.reason,
+                }
+                for candidate in recognition.candidates
+            ],
+        )
 
-        for candidate in recognition.candidates:
-            if candidate.confidence < 0.70:
+        for candidate in verification_candidates:
+            verification = self.recognition.verify_exact_match(
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                product_code=candidate.product_code,
+            )
+            logger.info(
+                "PRODUCT MATCH VERIFIED code=%s exact=%s confidence=%.3f "
+                "matched_reference=%s mismatches=%s",
+                candidate.product_code,
+                verification.exact_match,
+                verification.confidence,
+                verification.matched_reference,
+                verification.mismatches,
+            )
+            if (
+                not verification.exact_match
+                or verification.confidence < 0.90
+            ):
                 continue
             product = self.catalog.public_info(
                 candidate.product_code
@@ -75,14 +119,14 @@ class ProductImageHandler:
                         "product": product,
                     }
                 )
+                break
 
         if not candidates:
             return {
                 "reply": (
-                    "Dạ em chưa nhận diện chính xác được sản phẩm trong "
-                    "ảnh này. Anh/chị gửi giúp em mã sản phẩm hoặc một "
-                    "ảnh rõ hơn, chụp trọn sản phẩm ở góc khác để em "
-                    "kiểm tra lại nhé. 😊"
+                    "Dạ, em chưa tìm thấy sản phẩm khớp với hình ảnh này "
+                    "trong hệ thống. Anh/chị có thể gửi mã sản phẩm hoặc "
+                    "một ảnh rõ hơn để em kiểm tra lại nhé. 😊"
                 ),
                 "product_codes": [],
             }

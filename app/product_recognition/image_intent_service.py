@@ -29,7 +29,7 @@ class ImageIntentService:
         image_bytes: bytes,
         mime_type: str,
         caption: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
         product_types = self.catalog.product_types()
         product_type_context = (
             "Các productType hợp lệ trong catalog:\n"
@@ -61,6 +61,7 @@ class ImageIntentService:
             return {
                 "intent": "unknown",
                 "product_type": "unknown",
+                "bounding_box": None,
             }
         try:
             result = ImageIntent.model_validate(
@@ -70,6 +71,7 @@ class ImageIntentService:
             return {
                 "intent": "unknown",
                 "product_type": "unknown",
+                "bounding_box": None,
             }
         resolved_type = (
             self.catalog.resolve_product_type(
@@ -81,4 +83,9 @@ class ImageIntentService:
         return {
             "intent": result.intent,
             "product_type": resolved_type or "unknown",
+            "bounding_box": (
+                result.bounding_box
+                if result.intent == "product_lookup"
+                else None
+            ),
         }

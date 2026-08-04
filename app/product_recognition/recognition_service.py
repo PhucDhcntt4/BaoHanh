@@ -10,6 +10,7 @@ from app.product_recognition.catalog_service import (
     ProductCatalogService,
 )
 from app.product_recognition.models import (
+    ProductMatchVerification,
     ProductRecognitionResult,
 )
 from app.services.product_image_store import (
@@ -92,7 +93,7 @@ class ProductRecognitionService:
         valid_codes = set()
         reference_limit = (
             5 if product_type != "unknown"
-            else 15
+            else 50
         )
         for reference in self.catalog.reference_products(
             product_type=(
@@ -158,3 +159,74 @@ class ProductRecognitionService:
             reverse=True,
         )
         return ProductRecognitionResult(candidates=filtered[:3])
+
+    def verify_exact_match(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        product_code: str,
+    ) -> ProductMatchVerification:
+        product = self.catalog.public_info(product_code)
+        if not product:
+            return ProductMatchVerification()
+
+        contents: list = [
+            (
+                "Xác minh ảnh CUSTOMER có phải đúng cùng một mẫu sản phẩm "
+                f"mã {product_code} hay không. Không chỉ kiểm tra cùng loại "
+                "hoặc cùng màu. Phải so sánh cấu trúc thân, kiểu quai, mũi, "
+                "đế, gót, đường may, khóa kéo, logo và các chi tiết trang trí. "
+                "Nền ảnh, chữ quảng cáo và giao diện website không phải bằng "
+                "chứng cùng mẫu. Hãy so sánh CUSTOMER riêng với TỪNG ảnh "
+                "REFERENCE. Chỉ cần khớp rõ với ít nhất một REFERENCE thì "
+                "exact_match=true và ghi số ảnh đó vào matched_reference. "
+                "Không được phủ nhận một ảnh đã khớp chỉ vì REFERENCE khác "
+                "có góc chụp, màu hoặc phụ kiện tháo rời khác. Chỉ đặt "
+                "exact_match=true và confidence>=0.90 khi gần như chắc chắn "
+                "là cùng một mẫu."
+            ),
+            "CUSTOMER IMAGE:",
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+        ]
+        loaded = 0
+        for reference_index, image_url in enumerate(
+            product.get("image_urls") or [],
+            start=1,
+        ):
+            try:
+                reference_bytes, reference_mime = self._reference_image(
+                    str(image_url)
+                )
+            except requests.RequestException:
+                continue
+            loaded += 1
+            contents.extend([
+                (
+                    f"REFERENCE {reference_index} "
+                    f"FOR product_code={product_code}:"
+                ),
+                types.Part.from_bytes(
+                    data=reference_bytes,
+                    mime_type=reference_mime,
+                ),
+            ])
+        if not loaded:
+            return ProductMatchVerification()
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=ProductMatchVerification,
+                temperature=0,
+            ),
+        )
+        if not response.text:
+            return ProductMatchVerification()
+        try:
+            return ProductMatchVerification.model_validate_json(
+                response.text
+            )
+        except ValueError:
+            return ProductMatchVerification()

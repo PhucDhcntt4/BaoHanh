@@ -37,7 +37,7 @@ class AIService(ABC):
         image_bytes: bytes,
         mime_type: str,
         caption: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         """Phân loại ảnh bảo hành, ảnh sản phẩm hoặc không rõ."""
 
     @abstractmethod

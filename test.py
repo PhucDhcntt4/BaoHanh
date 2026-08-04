@@ -7,6 +7,14 @@ from typing import Any
 import requests
 from dotenv import load_dotenv  # type: ignore
 
+from app.database.connection import database_connection
+from app.scripts.import_products_to_db import (
+    import_catalog,
+    initialize_schema,
+    normalize_catalog,
+)
+from app.scripts.sync_product_images import sync_product_images
+
 
 load_dotenv()
 
@@ -716,6 +724,38 @@ def save_product(product_data: dict) -> None:
     else:
         print(f"✓ Added: {sku}")
 
+
+def import_products_to_database(
+    product_items: list[dict[str, Any]],
+) -> int:
+    """Chuẩn hóa và upsert các sản phẩm vừa lấy vào PostgreSQL."""
+
+    if not product_items:
+        raise ValueError("Không có sản phẩm để import vào database.")
+
+    catalog = normalize_catalog(product_items)
+    if not catalog["products"]:
+        raise ValueError("Dữ liệu sản phẩm không thể chuẩn hóa.")
+
+    variant_count = sum(
+        len(product["variants"])
+        for product in catalog["products"].values()
+    )
+    image_count = sum(
+        len(product["images"])
+        for product in catalog["products"].values()
+    )
+
+    print(
+        "\nĐang import database: "
+        f"products={len(catalog['products'])}, "
+        f"variants={variant_count}, images={image_count}"
+    )
+
+    with database_connection() as connection:
+        initialize_schema(connection)
+        return import_catalog(connection, catalog)
+
 def main() -> None:
     print("====================================")
     print("  LẤY SẢN PHẨM SHOPIFY THEO SKU")
@@ -759,8 +799,26 @@ def main() -> None:
                 save_product(product_data)
                 print_product_summary(product_data)
 
+            image_result = sync_product_images(
+                matching_products,
+                remove_stale=False,
+            )
+            sync_run_id = import_products_to_database(
+                matching_products
+            )
+
             print("\n========== HOÀN THÀNH ==========")
             print(f"Đã lưu vào: {PRODUCTS_FILE}")
+            print(
+                "Đã import/cập nhật PostgreSQL: "
+                f"sync_run_id={sync_run_id}"
+            )
+            print(
+                "Ảnh local: "
+                f"tải mới={image_result['downloaded']}, "
+                f"đã có={image_result['skipped']}, "
+                f"lỗi={image_result['failed']}"
+            )
 
         except KeyboardInterrupt:
             print("\n\nĐã dừng chương trình.")

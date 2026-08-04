@@ -287,7 +287,7 @@ class GeminiProvider(AIService):
         image_bytes: bytes,
         mime_type: str,
         caption: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         return self.image_intent_service.classify(
             image_bytes=image_bytes,
             mime_type=mime_type,

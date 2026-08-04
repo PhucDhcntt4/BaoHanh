@@ -193,14 +193,21 @@ def download_image(
     return response.content, mime_type
 
 
-def main() -> None:
+def sync_product_images(
+    products: list[dict[str, Any]] | None = None,
+    *,
+    remove_stale: bool = False,
+) -> dict[str, int]:
+    """Tải ảnh catalog về local và cập nhật manifest."""
+
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(
             encoding="utf-8",
             errors="replace",
         )
 
-    products = load_products()
+    if products is None:
+        products = load_products()
 
     PRODUCT_IMAGE_DIR.mkdir(
         parents=True,
@@ -311,9 +318,10 @@ def main() -> None:
                     f"{image_url} | {error}"
                 )
 
-    for stale_url in set(manifest) - active_urls:
-        manifest.pop(stale_url, None)
-        removed_from_manifest += 1
+    if remove_stale:
+        for stale_url in set(manifest) - active_urls:
+            manifest.pop(stale_url, None)
+            removed_from_manifest += 1
 
     temporary_manifest_path = (
         PRODUCT_IMAGE_MANIFEST_PATH.with_suffix(".json.tmp")
@@ -342,6 +350,17 @@ def main() -> None:
         "Manifest: "
         f"{PRODUCT_IMAGE_MANIFEST_PATH}"
     )
+
+    return {
+        "downloaded": downloaded,
+        "skipped": skipped,
+        "failed": failed,
+        "removed_from_manifest": removed_from_manifest,
+    }
+
+
+def main() -> None:
+    sync_product_images(remove_stale=True)
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ from app.services.warranty_tools import (
 from app.product_recognition.product_tools import (
     get_product_info
 )
+from app.product_recognition.image_crop import crop_product_region
 
 
 router = APIRouter(
@@ -336,7 +337,7 @@ def _send_product_photos(
         # Nếu khách yêu cầu một màu cụ thể, ưu tiên album của đúng
         # Shopify Product màu đó thay vì album mặc định của mã mẫu.
         selected_color, selected_urls = _requested_color_images(
-            user_message,
+            f"{user_message}\n{reply}",
             images_by_color,
         )
         if selected_urls:
@@ -378,8 +379,18 @@ def _send_product_photos(
                     try:
                         resend_requested = (
                             ai_service.classify_product_image_request(
-                                user_message
+                                (
+                                    f"Tin nhắn khách: {user_message}\n"
+                                    f"Phản hồi dự định của trợ lý: {reply}"
+                                )
                             )
+                        )
+                        logger.info(
+                            "PRODUCT IMAGE REQUEST chat_id=%s code=%s "
+                            "requested=%s",
+                            chat_id,
+                            product_code,
+                            resend_requested,
                         )
                     except Exception:
                         logger.exception(
@@ -720,19 +731,56 @@ def process_image(
             "product_type",
             "unknown",
         )
+        bounding_box = intent_result.get("bounding_box")
         status = image_intent
         logger.info(
-            "IMAGE CLASSIFIED chat_id=%s intent=%s product_type=%s",
+            "IMAGE CLASSIFIED chat_id=%s intent=%s product_type=%s bbox=%s",
             chat_id,
             image_intent,
             product_type,
+            bounding_box,
         )
 
         if image_intent == "product_lookup":
+            recognition_bytes, recognition_mime, crop_applied = (
+                crop_product_region(image_bytes, bounding_box)
+            )
+            if not crop_applied:
+                recognition_bytes = image_bytes
+                recognition_mime = mime_type
+            logger.info(
+                "PRODUCT IMAGE CROP chat_id=%s applied=%s "
+                "original_bytes=%s recognition_bytes=%s",
+                chat_id,
+                crop_applied,
+                len(image_bytes),
+                len(recognition_bytes),
+            )
+            if product_type == "unknown" and crop_applied:
+                ai_started_at = time.perf_counter()
+                refined_intent = ai_service.classify_image_intent(
+                    image_bytes=recognition_bytes,
+                    mime_type=recognition_mime,
+                    caption=caption,
+                )
+                ai_seconds += time.perf_counter() - ai_started_at
+                refined_product_type = refined_intent.get(
+                    "product_type", "unknown"
+                )
+                if (
+                    refined_intent.get("intent") == "product_lookup"
+                    and refined_product_type != "unknown"
+                ):
+                    product_type = refined_product_type
+                logger.info(
+                    "IMAGE RECLASSIFIED chat_id=%s product_type=%s",
+                    chat_id,
+                    product_type,
+                )
             ai_started_at = time.perf_counter()
             product_result = ai_service.handle_product_image(
-                image_bytes=image_bytes,
-                mime_type=mime_type,
+                image_bytes=recognition_bytes,
+                mime_type=recognition_mime,
                 product_type=product_type,
             )
             ai_seconds += time.perf_counter() - ai_started_at

@@ -25,6 +25,7 @@ from app.models import (
 from app.product_recognition.catalog_service import ProductCatalogService
 from app.product_recognition.models import (
     ImageIntent,
+    ProductMatchVerification,
     ProductRecognitionResult,
 )
 from app.product_recognition.product_tools import (
@@ -155,7 +156,7 @@ class OpenAIProvider(AIService):
         image_bytes: bytes,
         mime_type: str,
         caption: str | None = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         product_types = self.catalog.product_types()
         dynamic_instructions = (
             self.image_intent_prompt
@@ -185,6 +186,11 @@ class OpenAIProvider(AIService):
         return {
             "intent": intent,
             "product_type": resolved_type or "unknown",
+            "bounding_box": (
+                parsed.bounding_box
+                if parsed and intent == "product_lookup"
+                else None
+            ),
         }
 
     def extract_order_from_image(
@@ -218,6 +224,72 @@ class OpenAIProvider(AIService):
             "order_code_confident": extracted.order_code_confident,
         }
 
+    def _verify_product_match(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        product_code: str,
+    ) -> ProductMatchVerification:
+        product = self.catalog.public_info(product_code)
+        if not product:
+            return ProductMatchVerification()
+        content: list[dict[str, Any]] = [
+            {
+                "type": "input_text",
+                "text": (
+                    "Xác minh CUSTOMER có đúng cùng một mẫu sản phẩm với "
+                    f"REFERENCE mã {product_code}. Không chỉ kiểm tra cùng "
+                    "loại hoặc cùng màu. So sánh cấu trúc thân, quai, mũi, "
+                    "đế, gót, đường may, logo và chi tiết trang trí. Bỏ qua "
+                    "nền, chữ quảng cáo và giao diện website. So sánh CUSTOMER "
+                    "riêng với từng REFERENCE. Nếu khớp rõ ít nhất một ảnh, "
+                    "exact_match=true và ghi số ảnh vào matched_reference. "
+                    "Không phủ nhận ảnh đã khớp vì reference khác có góc, màu "
+                    "hoặc phụ kiện tháo rời khác. Chỉ exact_match=true và "
+                    "confidence>=0.90 khi gần như chắc chắn cùng mẫu."
+                ),
+            },
+            {"type": "input_text", "text": "CUSTOMER IMAGE:"},
+            self._image_item(image_bytes, mime_type),
+        ]
+        loaded = 0
+        for reference_index, image_url in enumerate(
+            product.get("image_urls") or [],
+            start=1,
+        ):
+            try:
+                local_image = self.image_store.get(str(image_url))
+                if local_image:
+                    reference_bytes, reference_mime = local_image
+                else:
+                    response = requests.get(str(image_url), timeout=30)
+                    response.raise_for_status()
+                    reference_bytes = response.content
+                    reference_mime = response.headers.get(
+                        "Content-Type", "image/jpeg"
+                    ).split(";")[0]
+            except requests.RequestException:
+                continue
+            loaded += 1
+            content.extend([
+                {
+                    "type": "input_text",
+                    "text": (
+                        f"REFERENCE {reference_index} "
+                        f"product_code={product_code}"
+                    ),
+                },
+                self._image_item(reference_bytes, reference_mime),
+            ])
+        if not loaded:
+            return ProductMatchVerification()
+        response = self.client.responses.parse(
+            model=self.model,
+            input=[{"role": "user", "content": content}],
+            text_format=ProductMatchVerification,
+        )
+        return response.output_parsed or ProductMatchVerification()
+
     def handle_product_image(
         self,
         image_bytes: bytes,
@@ -239,7 +311,7 @@ class OpenAIProvider(AIService):
 
         reference_limit = (
             5 if product_type != "unknown"
-            else 15
+            else 50
         )
         for reference in self.catalog.reference_products(
             product_type=(
@@ -288,11 +360,36 @@ class OpenAIProvider(AIService):
             text_format=ProductRecognitionResult,
         )
         recognition = response.output_parsed or ProductRecognitionResult()
+        valid_candidates = [
+            candidate
+            for candidate in recognition.candidates
+            if candidate.product_code.upper() in valid_codes
+        ]
+        verification_candidates = sorted(
+            (
+                candidate
+                for candidate in valid_candidates
+                if candidate.confidence >= 0.70
+            ),
+            key=lambda item: item.confidence,
+            reverse=True,
+        )[:3]
+        if not verification_candidates and product_type != "unknown":
+            return self.handle_product_image(
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                product_type="unknown",
+            )
         candidates = []
-        for candidate in recognition.candidates:
+        for candidate in verification_candidates:
+            verification = self._verify_product_match(
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                product_code=candidate.product_code,
+            )
             if (
-                candidate.confidence < 0.70
-                or candidate.product_code.upper() not in valid_codes
+                not verification.exact_match
+                or verification.confidence < 0.90
             ):
                 continue
             product = self.catalog.public_info(
@@ -304,13 +401,14 @@ class OpenAIProvider(AIService):
                     "visual_reason": candidate.reason,
                     "product": product,
                 })
+                break
 
         if not candidates:
             return {
                 "reply": (
-                    "Dạ em chưa nhận diện chính xác được sản phẩm trong "
-                    "ảnh này. Anh/chị gửi giúp em mã sản phẩm hoặc ảnh "
-                    "rõ hơn, chụp trọn sản phẩm ở góc khác nhé. 😊"
+                    "Dạ, em chưa tìm thấy sản phẩm khớp với hình ảnh này "
+                    "trong hệ thống. Anh/chị có thể gửi mã sản phẩm hoặc "
+                    "một ảnh rõ hơn để em kiểm tra lại nhé. 😊"
                 ),
                 "product_codes": [],
             }
