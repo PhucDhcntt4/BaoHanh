@@ -5,7 +5,14 @@ import re
 from google import genai
 from google.genai import types # type: ignore
 
-from app.config import PRODUCT_REPLY_PROMPT_PATH
+from app.config import (
+    PRODUCT_REPLY_PROMPT_PATH,
+    PRODUCT_VECTOR_SEARCH_ENABLED,
+    VECTOR_SEARCH_LIMIT,
+)
+from app.database.product_embedding_repository import (
+    ProductEmbeddingRepository,
+)
 from app.product_recognition.catalog_service import (
     ProductCatalogService,
 )
@@ -14,6 +21,13 @@ from app.product_recognition.recognition_service import (
 )
 from app.product_recognition.models import (
     MIN_PRODUCT_MATCH_CONFIDENCE,
+)
+from app.product_recognition.image_embedding_service import (
+    ImageEmbeddingService,
+)
+from app.product_recognition.vector_decision import decide_vector_match
+from app.product_recognition.product_type_groups import (
+    equivalent_product_types,
 )
 
 
@@ -38,13 +52,118 @@ class ProductImageHandler:
         self.reply_prompt = PRODUCT_REPLY_PROMPT_PATH.read_text(
             encoding="utf-8"
         )
+        self.vector_enabled = PRODUCT_VECTOR_SEARCH_ENABLED
+        self.embedding_service = None
+        self.embedding_repository = None
+        if self.vector_enabled:
+            try:
+                self.embedding_service = ImageEmbeddingService()
+                self.embedding_repository = ProductEmbeddingRepository()
+            except Exception:
+                logger.exception(
+                    "VECTOR INITIALIZATION ERROR; fallback=legacy_gemini"
+                )
+                self.vector_enabled = False
 
-    def handle(
+    def _match_with_vector(
         self,
         image_bytes: bytes,
         mime_type: str,
-        product_type: str = "unknown",
-    ) -> dict:
+        product_type: str,
+        original_image_bytes: bytes | None = None,
+        original_mime_type: str | None = None,
+    ) -> list[dict]:
+        if not self.embedding_service or not self.embedding_repository:
+            return []
+
+        embedding = self.embedding_service.embed_bytes(image_bytes)
+        filtered_types = (
+            None
+            if product_type == "unknown"
+            else equivalent_product_types(product_type)
+        )
+        rows = self.embedding_repository.search(
+            embedding=embedding,
+            model_name=self.embedding_service.model_name,
+            pretrained_name=self.embedding_service.pretrained_name,
+            product_type=filtered_types,
+            limit=VECTOR_SEARCH_LIMIT,
+        )
+        decision = decide_vector_match(rows)
+
+        # Product type do AI phân loại có thể sai. Khi tập đã lọc
+        # không đủ tin cậy, thử lại trên toàn catalog.
+        if decision.status == "no_match" and filtered_types:
+            rows = self.embedding_repository.search(
+                embedding=embedding,
+                model_name=self.embedding_service.model_name,
+                pretrained_name=self.embedding_service.pretrained_name,
+                product_type=None,
+                limit=VECTOR_SEARCH_LIMIT,
+            )
+            decision = decide_vector_match(rows)
+
+        logger.info(
+            "VECTOR PRODUCT CANDIDATES status=%s top=%.4f margin=%.4f "
+            "values=%s",
+            decision.status,
+            decision.top_similarity,
+            decision.margin,
+            [
+                {
+                    "code": item["product_code"],
+                    "color": item.get("color"),
+                    "similarity": round(float(item["similarity"]), 4),
+                }
+                for item in decision.candidates
+            ],
+        )
+        if decision.status == "no_match":
+            return []
+
+        candidate_codes = [
+            item["product_code"] for item in decision.candidates
+        ]
+        verification = self.recognition.verify_vector_candidates(
+            image_bytes=image_bytes,
+            mime_type=mime_type,
+            candidate_rows=rows,
+            candidate_codes=candidate_codes,
+            original_image_bytes=original_image_bytes,
+            original_mime_type=original_mime_type,
+        )
+        logger.info(
+            "VECTOR CANDIDATE VERIFIED exact=%s code=%s confidence=%.3f "
+            "reason=%s",
+            verification.exact_match,
+            verification.product_code,
+            verification.confidence,
+            verification.reason,
+        )
+        if (
+            not verification.exact_match
+            or not verification.product_code
+            or verification.confidence < 0.90
+        ):
+            return []
+
+        product = self.catalog.public_info(verification.product_code)
+        if not product:
+            return []
+        return [{
+            "confidence": verification.confidence,
+            "visual_reason": verification.reason,
+            "product": product,
+        }]
+
+    def _match_with_legacy_gemini(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        product_type: str,
+    ) -> list[dict]:
+        """Luồng cũ, chỉ dùng khi vector bị tắt hoặc bị lỗi."""
+
         recognition = self.recognition.recognize(
             image_bytes=image_bytes,
             mime_type=mime_type,
@@ -66,7 +185,7 @@ class ProductImageHandler:
                 mime_type=mime_type,
                 product_type="unknown",
             )
-        candidates = []
+        candidates: list[dict] = []
         verification_candidates = sorted(
             (
                 candidate
@@ -121,6 +240,42 @@ class ProductImageHandler:
                 )
                 break
 
+        return candidates
+
+    def handle(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        product_type: str = "unknown",
+        original_image_bytes: bytes | None = None,
+        original_mime_type: str | None = None,
+    ) -> dict:
+        candidates: list[dict]
+        if self.vector_enabled:
+            try:
+                candidates = self._match_with_vector(
+                    image_bytes=image_bytes,
+                    mime_type=mime_type,
+                    product_type=product_type,
+                    original_image_bytes=original_image_bytes,
+                    original_mime_type=original_mime_type,
+                )
+            except Exception:
+                logger.exception(
+                    "VECTOR PRODUCT SEARCH ERROR; fallback=legacy_gemini"
+                )
+                candidates = self._match_with_legacy_gemini(
+                    image_bytes=image_bytes,
+                    mime_type=mime_type,
+                    product_type=product_type,
+                )
+        else:
+            candidates = self._match_with_legacy_gemini(
+                image_bytes=image_bytes,
+                mime_type=mime_type,
+                product_type=product_type,
+            )
+
         if not candidates:
             return {
                 "reply": (
@@ -166,6 +321,10 @@ class ProductImageHandler:
                 return {
                     "reply": reply,
                     "product_codes": sorted(allowed_codes),
+                    "follow_up": (
+                        "Anh/chị cần tư vấn thêm hay muốn đặt "
+                        "hàng mẫu này không ạ? ❤️"
+                    ),
                 }
 
         top = candidates[0]
@@ -182,4 +341,8 @@ class ProductImageHandler:
                 f"mã {product['product_code']} ạ."
             ),
             "product_codes": [product["product_code"]],
+            "follow_up": (
+                "Anh/chị cần tư vấn thêm hay muốn đặt "
+                "hàng mẫu này không ạ? ❤️"
+            ),
         }

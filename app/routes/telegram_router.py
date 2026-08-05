@@ -15,15 +15,7 @@ from fastapi import ( # type: ignore
 )
 
 from app.services.AI.base import AIService
-from app.services.order_service import (
-    OrderService,
-    normalize_phone,
-)
 from app.services.telegram_service import TelegramService
-from app.services.warranty_tools import (
-    activate_warranty,
-    search_order,
-)
 from app.product_recognition.product_tools import (
     get_product_info
 )
@@ -39,16 +31,13 @@ logger = logging.getLogger("uvicorn.error")
 
 ai_service: AIService | None = None
 telegram_service: TelegramService | None = None
-order_service = OrderService()
 
 _state_lock = threading.Lock()
 _histories: dict[int, deque[dict[str, str]]] = {}
 _processed_updates: deque[int] = deque(maxlen=1000)
 _processed_update_set: set[int] = set()
-_pending_activations: dict[int, dict[str, Any]] = {}
 _shown_product_codes: dict[int, set[str]] = {}
 _active_product_codes: dict[int, list[str]] = {}
-_PENDING_TTL_SECONDS = 10 * 60
 
 
 def configure_telegram(
@@ -63,88 +52,6 @@ def telegram_ready() -> bool:
     return (
         ai_service is not None
         and telegram_service is not None
-    )
-
-
-def _save_pending_activation(
-    chat_id: int,
-    phone: str,
-    order_code: str,
-) -> None:
-    with _state_lock:
-        _pending_activations[chat_id] = {
-            "phone": phone,
-            "order_code": order_code,
-            "created_at": time.monotonic(),
-        }
-
-
-def _take_pending_activation(
-    chat_id: int,
-) -> dict[str, Any] | None:
-    with _state_lock:
-        pending = _pending_activations.pop(chat_id, None)
-
-    if not pending:
-        return None
-
-    age = time.monotonic() - pending["created_at"]
-
-    if age > _PENDING_TTL_SECONDS:
-        return None
-
-    return pending
-
-
-def _peek_pending_activation(
-    chat_id: int,
-) -> dict[str, Any] | None:
-    with _state_lock:
-        pending = _pending_activations.get(chat_id)
-
-        if not pending:
-            return None
-
-        age = time.monotonic() - pending["created_at"]
-
-        if age > _PENDING_TTL_SECONDS:
-            _pending_activations.pop(chat_id, None)
-            return None
-
-        return dict(pending)
-
-
-def _cancel_pending_activation(chat_id: int) -> bool:
-    with _state_lock:
-        return _pending_activations.pop(chat_id, None) is not None
-
-
-def _mask_phone(phone: str) -> str:
-    return phone
-
-
-def _masked_phone_matches(
-    full_phone: str,
-    masked_phone: str,
-) -> bool:
-    normalized_full = normalize_phone(full_phone)
-    normalized_masked = (
-        masked_phone.replace("x", "*").replace("X", "*")
-    )
-
-    if not normalized_full or "*" not in normalized_masked:
-        return False
-
-    prefix, _, suffix = normalized_masked.partition("*")
-    suffix = suffix.lstrip("*")
-
-    if not prefix or not suffix:
-        return False
-
-    return (
-        normalized_full.startswith(prefix)
-        and normalized_full.endswith(suffix)
-        and len(normalized_full) >= len(prefix) + len(suffix)
     )
 
 
@@ -214,6 +121,18 @@ def _normalize_text(value: Any) -> str:
         for character in normalized
         if unicodedata.category(character) != "Mn"
     ).replace("đ", "d")
+
+
+def _remove_image_urls(value: Any) -> str:
+    """Không cho URL ảnh catalog xuất hiện trong tin nhắn Telegram."""
+
+    text = re.sub(r"https?://\S+", "", str(value or ""))
+    lines = [
+        line.rstrip()
+        for line in text.splitlines()
+        if line.strip().strip("•- ")
+    ]
+    return "\n".join(lines).strip()
 
 
 def _remember_active_products(
@@ -297,15 +216,20 @@ def _send_product_photos(
     user_message: str = "",
     force: bool = False,
     product_codes: list[str] | None = None,
-) -> None:
+    intro_text: str = "",
+) -> int:
     if telegram_service is None:
-        return
+        return 0
 
     # Lấy các từ có khả năng là mã sản phẩm trong câu trả lời.
     possible_codes = list(product_codes or []) + re.findall(
         r"\b[A-Za-z0-9]{3,20}\b",
         reply,
     )
+    possible_codes.extend(re.findall(
+        r"\b[A-Za-z0-9]{3,20}\b",
+        user_message,
+    ))
     possible_codes.extend(_active_products(chat_id))
     possible_codes = list(dict.fromkeys(
         str(code).strip().upper()
@@ -317,6 +241,7 @@ def _send_product_photos(
     sent_count = 0
     resend_checked = False
     resend_requested = False
+    intro_sent = False
 
     for possible_code in possible_codes:
         result = get_product_info(possible_code)
@@ -336,10 +261,17 @@ def _send_product_photos(
 
         # Nếu khách yêu cầu một màu cụ thể, ưu tiên album của đúng
         # Shopify Product màu đó thay vì album mặc định của mã mẫu.
+        # Ưu tiên màu do khách nói. Chỉ dùng câu trả lời AI
+        # làm fallback khi tin nhắn khách không chứa màu.
         selected_color, selected_urls = _requested_color_images(
-            f"{user_message}\n{reply}",
+            user_message,
             images_by_color,
         )
+        if selected_color is None:
+            selected_color, selected_urls = _requested_color_images(
+                reply,
+                images_by_color,
+            )
         if selected_urls:
             photo_urls = selected_urls
         elif selected_color == "":
@@ -357,6 +289,16 @@ def _send_product_photos(
             photo_urls = [product["featured_image"]]
 
         photo_urls = list(dict.fromkeys(photo_urls))[:4]
+
+        logger.info(
+            "PRODUCT ALBUM SELECTED chat_id=%s code=%s color=%s "
+            "images=%s first_url=%s",
+            chat_id,
+            product_code,
+            selected_color,
+            len(photo_urls),
+            photo_urls[0] if photo_urls else None,
+        )
 
 
         if (
@@ -402,34 +344,13 @@ def _send_product_photos(
             if not resend_requested:
                 continue
 
-        product_name = (
-            product.get("product_name")
-            or "Sản phẩm Đông Hải"
-        )
-
-        prices = product.get("prices") or []
-        colors = product.get("colors") or []
-
-        caption_lines = [
-            str(product_name),
-            f"Mã sản phẩm: {product_code}",
-        ]
-
-        if prices:
-            formatted_price = (
-                f"{prices[0]:,.0f}"
-                .replace(",", ".")
-            )
-            caption_lines.append(
-                f"Giá: {formatted_price}đ"
-            )
-
-        if colors:
-            caption_lines.append(
-                f"Màu: {', '.join(colors)}"
-            )
-
         try:
+            if intro_text and not intro_sent:
+                telegram_service.send_message(
+                    chat_id=chat_id,
+                    text=intro_text,
+                )
+                intro_sent = True
             telegram_service.send_media_group(
                 chat_id=chat_id,
                 photo_urls=[
@@ -457,6 +378,8 @@ def _send_product_photos(
         # Tránh gửi quá nhiều ảnh cùng lúc.
         if sent_count >= 3:
             break
+
+    return sent_count
 
 def extract_message(
     payload: dict[str, Any],
@@ -503,108 +426,55 @@ def process_message(
         assert telegram_service is not None
         assert ai_service is not None
 
-        pending = _peek_pending_activation(chat_id)
-        confirmation_intent = "unknown"
-        if pending:
-            ai_started_at = time.perf_counter()
-            confirmation_intent = (
-                ai_service.classify_confirmation_intent(text)
-            )
-            ai_seconds += time.perf_counter() - ai_started_at
-
-        if confirmation_intent == "cancel":
-            cancelled = _cancel_pending_activation(chat_id)
-            event = (
-                "Khách đã hủy yêu cầu kích hoạt bảo hành đang chờ."
-                if cancelled
-                else "Khách yêu cầu hủy nhưng không có yêu cầu nào đang chờ."
-            )
-            fallback = (
-                "Dạ em đã hủy yêu cầu kích hoạt bảo hành ạ."
-                if cancelled
-                else "Dạ hiện không có yêu cầu nào đang chờ hủy ạ."
-            )
-            reply = _agent_reply(
-                chat_id,
-                event,
-                fallback,
-            )
-            telegram_service.send_message(chat_id, reply)
-            return
-
-        if confirmation_intent == "confirm":
-            pending = _take_pending_activation(chat_id)
-
-            if not pending:
-                fallback = (
-                        "Dạ yêu cầu xác nhận không tồn tại hoặc đã "
-                        "hết hạn. Anh/chị vui lòng gửi lại ảnh ạ."
-                )
-                reply = _agent_reply(
-                    chat_id,
-                    (
-                        "Khách xác nhận nhưng yêu cầu đọc ảnh không "
-                        "tồn tại hoặc đã hết hạn."
-                    ),
-                    fallback,
-                )
-                telegram_service.send_message(chat_id, reply)
-                return
-
-            result = activate_warranty(
-                order_code=pending["order_code"],
-                phone=pending["phone"],
-                customer_id=f"telegram:{chat_id}",
-            )
-            status = result.get("status")
-
-            if status == "activated":
-                event = (
-                    f"Đã kích hoạt bảo hành thành công cho đơn "
-                    f"{pending['order_code']}."
-                )
-                fallback = (
-                    f"Dạ đơn {pending['order_code']} đã được kích "
-                    "hoạt bảo hành thành công ạ."
-                )
-            elif status == "already_activated":
-                event = (
-                    f"Đơn {pending['order_code']} đã được kích hoạt "
-                    "bảo hành trước đó."
-                )
-                fallback = (
-                    f"Dạ đơn {pending['order_code']} đã được kích "
-                    "hoạt bảo hành trước đó ạ."
-                )
-            elif status == "order_not_eligible":
-                event = (
-                    f"Đơn {pending['order_code']} chưa đủ điều kiện "
-                    "kích hoạt bảo hành."
-                )
-                fallback = (
-                    f"Dạ đơn {pending['order_code']} hiện chưa đủ "
-                    "điều kiện kích hoạt bảo hành ạ."
-                )
-            else:
-                event = (
-                    f"Không thể kích hoạt bảo hành cho đơn "
-                    f"{pending['order_code']} theo kết quả hệ thống."
-                )
-                fallback = (
-                    "Dạ em chưa thể kích hoạt theo thông tin trong "
-                    "ảnh. Anh/chị vui lòng kiểm tra và thử lại ạ."
-                )
-
-            reply = _agent_reply(
-                chat_id,
-                event,
-                fallback,
-            )
-            telegram_service.send_message(chat_id, reply)
-            return
-
         telegram_service.send_typing(chat_id)
 
+        image_only_request = False
+        try:
+            classify_started_at = time.perf_counter()
+            image_only_request = (
+                ai_service.classify_product_image_request(text)
+            )
+            ai_seconds += time.perf_counter() - classify_started_at
+            logger.info(
+                "PRODUCT IMAGE-ONLY REQUEST chat_id=%s requested=%s",
+                chat_id,
+                image_only_request,
+            )
+        except Exception:
+            logger.exception(
+                "Không thể phân loại yêu cầu chỉ gửi ảnh "
+                "chat_id=%s",
+                chat_id,
+            )
+
+        if image_only_request:
+            # AI viết câu phản hồi tự nhiên trước; Telegram chỉ
+            # chịu trách nhiệm gửi album đúng màu ngay sau đó.
+            ai_started_at = time.perf_counter()
+            image_result = ai_service.chat(
+                message=text,
+                customer_id=f"telegram:{chat_id}",
+                history=_get_history(chat_id),
+            )
+            ai_seconds += time.perf_counter() - ai_started_at
+            image_reply = _remove_image_urls(
+                image_result.get("reply")
+            )
+
+            sent_count = _send_product_photos(
+                chat_id=chat_id,
+                reply=image_reply,
+                user_message=text,
+                force=True,
+                intro_text=image_reply,
+            )
+            if sent_count > 0:
+                if image_reply:
+                    _append_history(chat_id, text, image_reply)
+                return
+
+        # Chỉ gọi chatbot khi tin nhắn không phải yêu cầu xem ảnh,
+        # hoặc khi không tìm được album phù hợp để gửi.
         ai_started_at = time.perf_counter()
         result = ai_service.chat(
             message=text,
@@ -613,7 +483,7 @@ def process_message(
         )
         ai_seconds += time.perf_counter() - ai_started_at
 
-        reply = result.get("reply")
+        reply = _remove_image_urls(result.get("reply"))
 
         if not reply:
             reply = (
@@ -782,6 +652,8 @@ def process_image(
                 image_bytes=recognition_bytes,
                 mime_type=recognition_mime,
                 product_type=product_type,
+                original_image_bytes=image_bytes,
+                original_mime_type=mime_type,
             )
             ai_seconds += time.perf_counter() - ai_started_at
             reply = product_result["reply"]
@@ -809,6 +681,11 @@ def process_image(
                     force=True,
                     product_codes=product_codes,
                 )
+                follow_up = str(
+                    product_result.get("follow_up") or ""
+                ).strip()
+                if follow_up:
+                    telegram_service.send_message(chat_id, follow_up)
                 _append_history(
                     chat_id,
                     (
@@ -820,229 +697,16 @@ def process_image(
                 )
             return
 
-        if image_intent == "unknown":
-            telegram_service.send_message(
-                chat_id,
-                (
-                    "Dạ em chưa xác định được mục đích của ảnh. "
-                    "Anh/chị muốn nhận diện sản phẩm hay kích hoạt "
-                    "bảo hành từ ảnh này ạ?"
-                ),
-            )
-            return
-
-        ai_started_at = time.perf_counter()
-        extracted = ai_service.extract_order_from_image(
-            image_bytes=image_bytes,
-            mime_type=mime_type,
-        )
-        ai_seconds += time.perf_counter() - ai_started_at
-        phone = extracted.get("phone")
-        masked_phone = extracted.get("masked_phone")
-        order_code = extracted.get("order_code")
-        phone_confident = (
-            extracted.get("phone_confident") is True
-        )
-        masked_phone_confident = (
-            extracted.get("masked_phone_confident") is True
-        )
-        order_code_confident = (
-            extracted.get("order_code_confident") is True
-        )
-        confident = (
-            phone_confident
-            and order_code_confident
-        )
-
-        if (
-            not phone
-            and masked_phone
-            and masked_phone_confident
-            and order_code
-            and order_code_confident
-        ):
-            matched_order = order_service.get_by_order_code(
-                order_code
-            )
-            stored_phone = (
-                str(matched_order.get("phone") or "")
-                if matched_order
-                else ""
-            )
-
-            if (
-                not matched_order
-                or not _masked_phone_matches(
-                    stored_phone,
-                    masked_phone,
-                )
-            ):
-                telegram_service.send_message(
-                    chat_id,
-                    (
-                        f"Dạ em đọc được mã đơn {order_code} và số điện "
-                        f"thoại {masked_phone}, nhưng thông tin chưa khớp "
-                        "với đơn hàng. Anh/chị vui lòng kiểm tra lại ạ."
-                    ),
-                )
-                return
-
-            if matched_order.get("warranty_status") == "activated":
-                telegram_service.send_message(
-                    chat_id,
-                    (
-                        f"Dạ em đã xác minh mã đơn {order_code} với số "
-                        f"điện thoại {masked_phone}. Đơn này đã được kích "
-                        "hoạt bảo hành trước đó rồi ạ."
-                    ),
-                )
-                return
-
-            _save_pending_activation(
-                chat_id=chat_id,
-                phone=stored_phone,
-                order_code=order_code,
-            )
-            telegram_service.send_message(
-                chat_id,
-                (
-                    f"Dạ em đã xác minh được mã đơn {order_code} và số "
-                    f"điện thoại {masked_phone}. Anh/chị trả lời XÁC NHẬN "
-                    "để kích hoạt bảo hành hoặc HỦY để dừng ạ. 😊"
-                ),
-            )
-            return
-
-        if (
-            order_code
-            and order_code_confident
-            and (not phone or not phone_confident)
-        ):
-            reply = (
-                f"Dạ em đã đọc được mã đơn {order_code}. Trên ảnh chưa "
-                "có số điện thoại đặt hàng, anh/chị gửi số điện thoại "
-                "giúp em để em xác minh và kích hoạt bảo hành nhé. 😊"
-            )
-            telegram_service.send_message(chat_id, reply)
-            _append_history(
-                chat_id,
-                (
-                    "Khách gửi ảnh kích hoạt bảo hành. Hệ thống đã đọc "
-                    f"chắc chắn mã đơn {order_code}, nhưng ảnh không có "
-                    "số điện thoại."
-                ),
-                reply,
-            )
-            return
-
-        if (
-            phone
-            and phone_confident
-            and (not order_code or not order_code_confident)
-        ):
-            reply = (
-                f"Dạ em đã đọc được số điện thoại {phone}, nhưng chưa "
-                "đọc rõ mã đơn. Anh/chị gửi thêm mã đơn hoặc ảnh có mã "
-                "đơn rõ hơn giúp em nhé. 😊"
-            )
-            telegram_service.send_message(chat_id, reply)
-            _append_history(
-                chat_id,
-                (
-                    "Khách gửi ảnh kích hoạt bảo hành. Hệ thống đã đọc "
-                    f"chắc chắn số điện thoại {phone}, nhưng chưa đọc "
-                    "được mã đơn."
-                ),
-                reply,
-            )
-            return
-
-        if not phone or not order_code or not confident:
-            fallback = (
-                "Dạ em chưa đọc rõ số điện thoại hoặc mã đơn. "
-                "Anh/chị vui lòng gửi ảnh rõ và đầy đủ hơn ạ."
-            )
-            telegram_service.send_message(
-                chat_id,
-                _agent_reply(
-                    chat_id,
-                    (
-                        "Không đọc chắc chắn được đầy đủ số điện "
-                        "thoại và mã đơn từ ảnh khách gửi."
-                    ),
-                    fallback,
-                ),
-            )
-            return
-
-        search_result = search_order(
-            phone=phone,
-            order_code=order_code,
-        )
-
-        if (
-            not search_result.get("success")
-            or search_result.get("count") != 1
-        ):
-            fallback = (
-                "Dạ thông tin trong ảnh chưa khớp với đơn hàng. "
-                "Anh/chị vui lòng kiểm tra và gửi lại ảnh ạ."
-            )
-            telegram_service.send_message(
-                chat_id,
-                _agent_reply(
-                    chat_id,
-                    (
-                        "Số điện thoại và mã đơn đọc từ ảnh không "
-                        "khớp duy nhất một đơn hàng."
-                    ),
-                    fallback,
-                ),
-            )
-            return
-
-        order = search_result["orders"][0]
-
-        if order.get("warranty_status") == "activated":
-            fallback = (
-                f"Dạ đơn {order_code} đã được kích hoạt trước đó ạ."
-            )
-            telegram_service.send_message(
-                chat_id,
-                _agent_reply(
-                    chat_id,
-                    (
-                        f"Đơn {order_code} đã được kích hoạt bảo "
-                        "hành trước đó."
-                    ),
-                    fallback,
-                ),
-            )
-            return
-
-        _save_pending_activation(
-            chat_id=chat_id,
-            phone=phone,
-            order_code=order_code,
-        )
-        fallback = (
-                f"Dạ em đọc được mã đơn {order_code}, số điện thoại "
-                f"{_mask_phone(phone)}. Anh/chị trả lời XÁC NHẬN "
-                "để kích hoạt hoặc HỦY để dừng ạ."
-        )
         telegram_service.send_message(
             chat_id,
-            _agent_reply(
-                chat_id,
-                (
-                    f"Đã đọc và xác minh được đơn {order_code}, "
-                    f"số điện thoại {_mask_phone(phone)}. "
-                    "Cần yêu cầu khách xác nhận kích hoạt hoặc hủy; "
-                    "chưa được nói đã kích hoạt."
-                ),
-                fallback,
+            (
+                "Dạ em chưa nhận diện được sản phẩm trong ảnh. "
+                "Anh/chị vui lòng gửi một ảnh sản phẩm rõ hơn, "
+                "chụp trọn sản phẩm hoặc gửi mã sản phẩm để em "
+                "kiểm tra nhé. 😊"
             ),
         )
+        return
 
     except Exception:
         status = "error"

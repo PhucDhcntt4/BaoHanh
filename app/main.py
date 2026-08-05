@@ -19,6 +19,9 @@ from app.routes.telegram_router import (  # noqa: E402
     router as telegram_router,
     telegram_ready,
 )
+from app.routes.admin_product_router import (  # noqa: E402
+    router as admin_product_router,
+)
 
 logger = logging.getLogger("uvicorn.error")
 
@@ -63,6 +66,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 app.include_router(telegram_router)
+app.include_router(admin_product_router)
 
 
 @app.get("/health")

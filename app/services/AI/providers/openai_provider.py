@@ -9,17 +9,13 @@ import requests
 from openai import OpenAI  # type: ignore
 
 from app.config import (
-    CONFIRMATION_PROMPT_PATH,
+    CUSTOMER_AGENT_PROMPT_PATH,
     IMAGE_INTENT_PROMPT_PATH,
-    IMAGE_ORDER_EXTRACTION_PROMPT_PATH,
     PRODUCT_IMAGE_REQUEST_PROMPT_PATH,
     PRODUCT_RECOGNITION_PROMPT_PATH,
     PRODUCT_REPLY_PROMPT_PATH,
-    WARRANTY_PROMPT_PATH,
 )
 from app.models import (
-    ConfirmationIntent,
-    ImageOrderInfo,
     ProductImageRequestIntent,
 )
 from app.product_recognition.catalog_service import ProductCatalogService
@@ -33,11 +29,8 @@ from app.product_recognition.product_tools import (
     search_products,
 )
 from app.services.AI.base import AIService
-from app.services.order_service import normalize_order_code, normalize_phone
 from app.services.product_image_store import ProductImageStore
-from app.services.warranty_tools import (
-    activate_warranty,
-    search_order,
+from app.services.policy_tools import (
     search_warranty_policy,
 )
 
@@ -58,18 +51,12 @@ class OpenAIProvider(AIService):
         if not self.model:
             raise RuntimeError("OPENAI_MODEL không được để trống")
 
-        self.system_prompt = self._read(WARRANTY_PROMPT_PATH)
-        self.confirmation_prompt = self._read(
-            CONFIRMATION_PROMPT_PATH
-        )
+        self.system_prompt = self._read(CUSTOMER_AGENT_PROMPT_PATH)
         self.product_image_request_prompt = self._read(
             PRODUCT_IMAGE_REQUEST_PROMPT_PATH
         )
         self.image_intent_prompt = self._read(
             IMAGE_INTENT_PROMPT_PATH
-        )
-        self.image_order_prompt = self._read(
-            IMAGE_ORDER_EXTRACTION_PROMPT_PATH
         )
         self.product_recognition_prompt = self._read(
             PRODUCT_RECOGNITION_PROMPT_PATH
@@ -84,8 +71,6 @@ class OpenAIProvider(AIService):
             str, Callable[..., dict[str, Any]]
         ] = {
             "search_warranty_policy": search_warranty_policy,
-            "search_order": search_order,
-            "activate_warranty": activate_warranty,
             "search_products": search_products,
             "get_product_info": get_product_info,
         }
@@ -135,14 +120,6 @@ class OpenAIProvider(AIService):
             raise RuntimeError("OpenAI không tạo được câu trả lời")
         return response.output_text.strip()
 
-    def classify_confirmation_intent(self, message: str) -> str:
-        parsed = self._parse_text(
-            message,
-            self.confirmation_prompt,
-            ConfirmationIntent,
-        )
-        return parsed.intent if parsed else "unknown"
-
     def classify_product_image_request(self, message: str) -> bool:
         parsed = self._parse_text(
             message,
@@ -191,37 +168,6 @@ class OpenAIProvider(AIService):
                 if parsed and intent == "product_lookup"
                 else None
             ),
-        }
-
-    def extract_order_from_image(
-        self,
-        image_bytes: bytes,
-        mime_type: str,
-    ) -> dict[str, Any]:
-        extracted = self._parse_image(
-            image_bytes=image_bytes,
-            mime_type=mime_type,
-            instructions=self.image_order_prompt,
-            text="Đọc thông tin đơn hàng trong ảnh.",
-            schema=ImageOrderInfo,
-        )
-        if extracted is None:
-            raise RuntimeError("OpenAI không trả kết quả đọc ảnh")
-
-        masked_phone = re.sub(
-            r"[^0-9*xX]",
-            "",
-            extracted.masked_phone or "",
-        ) or None
-        return {
-            "phone": normalize_phone(extracted.phone),
-            "masked_phone": masked_phone,
-            "order_code": normalize_order_code(extracted.order_code),
-            "phone_confident": extracted.phone_confident,
-            "masked_phone_confident": (
-                extracted.masked_phone_confident
-            ),
-            "order_code_confident": extracted.order_code_confident,
         }
 
     def _verify_product_match(
@@ -295,6 +241,8 @@ class OpenAIProvider(AIService):
         image_bytes: bytes,
         mime_type: str,
         product_type: str = "unknown",
+        original_image_bytes: bytes | None = None,
+        original_mime_type: str | None = None,
     ) -> dict[str, Any]:
         content: list[dict[str, Any]] = [
             {
@@ -575,29 +523,12 @@ class OpenAIProvider(AIService):
             }
 
         string = {"type": "string"}
-        nullable_string = {"type": ["string", "null"]}
         return [
             tool(
                 "search_warranty_policy",
                 "Tra cứu chính sách bảo hành và đổi hàng.",
                 {"question": string},
                 ["question"],
-            ),
-            tool(
-                "search_order",
-                "Tìm đơn theo số điện thoại và mã đơn.",
-                {"phone": string, "order_code": nullable_string},
-                ["phone", "order_code"],
-            ),
-            tool(
-                "activate_warranty",
-                "Kích hoạt bảo hành cho đơn đã xác minh.",
-                {
-                    "order_code": string,
-                    "phone": string,
-                    "customer_id": string,
-                },
-                ["order_code", "phone", "customer_id"],
             ),
             tool(
                 "search_products",

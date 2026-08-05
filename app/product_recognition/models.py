@@ -6,7 +6,6 @@ from pydantic import BaseModel, Field
 
 class ImageIntent(BaseModel):
     intent: Literal[
-        "warranty_document",
         "product_lookup",
         "unknown",
     ]
@@ -34,6 +33,13 @@ class ProductMatchVerification(BaseModel):
     confidence: float = Field(default=0, ge=0, le=1)
     matched_reference: int | None = None
     mismatches: list[str] = Field(default_factory=list)
+
+
+class VectorCandidateVerification(BaseModel):
+    exact_match: bool = False
+    product_code: str | None = None
+    confidence: float = Field(default=0, ge=0, le=1)
+    reason: str = ""
 
 
 MIN_PRODUCT_MATCH_CONFIDENCE = 0.85

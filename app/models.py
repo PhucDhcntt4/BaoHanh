@@ -32,18 +32,5 @@ class WarrantyMessageResponse(BaseModel):
     status: str
     message: str
 
-class ImageOrderInfo(BaseModel):
-    phone: str | None = None
-    masked_phone: str | None = None
-    order_code: str | None = None
-    phone_confident: bool = False
-    masked_phone_confident: bool = False
-    order_code_confident: bool = False
-
-
-class ConfirmationIntent(BaseModel):
-    intent: Literal["confirm", "cancel", "unknown"]
-
-
 class ProductImageRequestIntent(BaseModel):
     intent: Literal["request_images", "not_request_images"]

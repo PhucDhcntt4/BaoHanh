@@ -6,12 +6,10 @@ from google import genai
 from google.genai import types # type: ignore
 
 from app.config import (
-    CONFIRMATION_PROMPT_PATH,
+    CUSTOMER_AGENT_PROMPT_PATH,
     PRODUCT_IMAGE_REQUEST_PROMPT_PATH,
-    WARRANTY_PROMPT_PATH,
 )
 from app.models import (
-    ConfirmationIntent,
     ProductImageRequestIntent,
 )
 from app.product_recognition.product_tools import (
@@ -26,12 +24,7 @@ from app.product_recognition.image_intent_service import (
     ImageIntentService,
 )
 from app.services.AI.base import AIService
-from app.services.image_extraction_service import (
-    ImageExtractionService,
-)
-from app.services.warranty_tools import (
-    activate_warranty,
-    search_order,
+from app.services.policy_tools import (
     search_warranty_policy,
 )
 
@@ -56,25 +49,13 @@ class GeminiProvider(AIService):
             "gemini-2.5-flash",
         )
 
-        if not WARRANTY_PROMPT_PATH.exists():
+        if not CUSTOMER_AGENT_PROMPT_PATH.exists():
             raise RuntimeError(
-                f"Không tìm thấy prompt: {WARRANTY_PROMPT_PATH}"
+                f"Không tìm thấy prompt: {CUSTOMER_AGENT_PROMPT_PATH}"
             )
 
-        self.system_prompt = WARRANTY_PROMPT_PATH.read_text(
+        self.system_prompt = CUSTOMER_AGENT_PROMPT_PATH.read_text(
             encoding="utf-8"
-        )
-
-        if not CONFIRMATION_PROMPT_PATH.exists():
-            raise RuntimeError(
-                "Không tìm thấy prompt phân loại xác nhận: "
-                f"{CONFIRMATION_PROMPT_PATH}"
-            )
-
-        self.confirmation_prompt = (
-            CONFIRMATION_PROMPT_PATH.read_text(
-                encoding="utf-8"
-            )
         )
 
         if not PRODUCT_IMAGE_REQUEST_PROMPT_PATH.exists():
@@ -91,16 +72,10 @@ class GeminiProvider(AIService):
 
         self.tools = [
             search_warranty_policy,
-            search_order,
-            activate_warranty,
             search_products,
             get_product_info,
         ]
         self.catalog = ProductCatalogService()
-        self.image_extraction_service = ImageExtractionService(
-            client=self.client,
-            model=self.model,
-        )
         self.image_intent_service = ImageIntentService(
             client=self.client,
             model=self.model,
@@ -170,8 +145,8 @@ class GeminiProvider(AIService):
     ) -> str:
         """
         Viết câu trả lời tự nhiên từ một kết quả nghiệp vụ đã được
-        Python xác minh. Hàm này không đăng ký tools nên không thể
-        tự tìm đơn hoặc kích hoạt lại.
+        Python xác minh. Hàm này không đăng ký tools nên chỉ
+        có thể diễn đạt lại dữ liệu đã được cung cấp.
         """
 
         contents: list[types.Content] = []
@@ -224,38 +199,6 @@ class GeminiProvider(AIService):
 
         return response.text.strip()
 
-    def classify_confirmation_intent(
-        self,
-        message: str,
-    ) -> str:
-        """
-        Phân loại câu trả lời khi có yêu cầu kích hoạt đang chờ.
-        Các cách diễn đạt được quản lý trong prompt, không nằm
-        trong danh sách từ khóa Python.
-        """
-
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=message,
-            config=types.GenerateContentConfig(
-                system_instruction=self.confirmation_prompt,
-                response_mime_type="application/json",
-                temperature=0,
-            ),
-        )
-
-        if not response.text:
-            return "unknown"
-
-        try:
-            parsed = ConfirmationIntent.model_validate(
-                json.loads(response.text)
-            )
-        except (json.JSONDecodeError, ValueError):
-            return "unknown"
-
-        return parsed.intent
-
     def classify_product_image_request(
         self,
         message: str,
@@ -294,26 +237,20 @@ class GeminiProvider(AIService):
             caption=caption,
         )
 
-    def extract_order_from_image(
-        self,
-        image_bytes: bytes,
-        mime_type: str,
-    ) -> dict[str, Any]:
-        return self.image_extraction_service.extract(
-            image_bytes=image_bytes,
-            mime_type=mime_type,
-        )
-
     def handle_product_image(
         self,
         image_bytes: bytes,
         mime_type: str,
         product_type: str = "unknown",
+        original_image_bytes: bytes | None = None,
+        original_mime_type: str | None = None,
     ) -> dict[str, Any]:
         return self.product_image_handler.handle(
             image_bytes=image_bytes,
             mime_type=mime_type,
             product_type=product_type,
+            original_image_bytes=original_image_bytes,
+            original_mime_type=original_mime_type,
         )
 
     def _build_contents(

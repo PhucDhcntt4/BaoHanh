@@ -15,6 +15,11 @@ from app.scripts.import_products_to_db import (
 )
 from app.scripts.sync_product_images import sync_product_images
 
+from app.scripts.build_product_image_embeddings import(
+    main as build_product_image_embeddings
+)
+
+
 
 load_dotenv()
 
@@ -803,9 +808,20 @@ def main() -> None:
                 matching_products,
                 remove_stale=False,
             )
+
             sync_run_id = import_products_to_database(
                 matching_products
             )
+
+            print("\n========== TẠO IMAGE EMBEDDING ==========")
+
+            try:
+                build_product_image_embeddings()
+            except Exception as error:
+                print(
+                    "Cảnh báo: sản phẩm đã được import nhưng "
+                    f"không thể tạo embedding: {error}"
+                )
 
             print("\n========== HOÀN THÀNH ==========")
             print(f"Đã lưu vào: {PRODUCTS_FILE}")

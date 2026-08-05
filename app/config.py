@@ -10,17 +10,11 @@ load_dotenv(PROJECT_ROOT / ".env")
 DATA_DIR = PROJECT_ROOT / "data"
 PROMPT_DIR = PROJECT_ROOT / "prompts"
 
-ORDERS_PATH = DATA_DIR / "orders.json"
-WARRANTIES_PATH = DATA_DIR / "warranties.json"
-WARRANTY_PROMPT_PATH = PROMPT_DIR / "warranty_agent.txt"
-CONFIRMATION_PROMPT_PATH = PROMPT_DIR / "confirmation_intent.txt"
+CUSTOMER_AGENT_PROMPT_PATH = PROMPT_DIR / "customer_agent.txt"
 PRODUCT_IMAGE_REQUEST_PROMPT_PATH = (
     PROMPT_DIR / "product_image_request.txt"
 )
 WARRANTY_POLICY_PATH = PROMPT_DIR / "warranty_policy.txt"
-IMAGE_ORDER_EXTRACTION_PROMPT_PATH = (
-    PROMPT_DIR / "image_order_extraction.txt"
-)
 PRODUCTS_PATH = PROJECT_ROOT / "products.json"
 IMAGE_INTENT_PROMPT_PATH = PROMPT_DIR / "image_intent.txt"
 PRODUCT_RECOGNITION_PROMPT_PATH = (
@@ -43,3 +37,47 @@ if PRODUCT_CATALOG_SOURCE not in {"json", "database"}:
     raise RuntimeError(
         "PRODUCT_CATALOG_SOURCE chỉ nhận 'json' hoặc 'database'"
     )
+
+VECTOR_MIN_SIMILARITY = float(
+    os.getenv(
+        "VECTOR_MIN_SIMILARITY",
+        "0.80",
+    )
+)
+
+VECTOR_AUTO_ACCEPT_SIMILARITY = float(
+    os.getenv(
+        "VECTOR_AUTO_ACCEPT_SIMILARITY",
+        "0.96",
+    )
+)
+
+VECTOR_MIN_MARGIN = float(
+    os.getenv(
+        "VECTOR_MIN_MARGIN",
+        "0.08",
+    )
+)
+
+VECTOR_MAX_CANDIDATES = int(
+    os.getenv(
+        "VECTOR_MAX_CANDIDATES",
+        "3",
+    )
+)
+
+PRODUCT_VECTOR_SEARCH_ENABLED = os.getenv(
+    "PRODUCT_VECTOR_SEARCH_ENABLED", "false"
+).strip().casefold() in {"1", "true", "yes", "on"}
+
+VECTOR_SEARCH_LIMIT = int(
+    os.getenv("VECTOR_SEARCH_LIMIT", "20")
+)
+
+IMAGE_EMBEDDING_MODEL = os.getenv(
+    "IMAGE_EMBEDDING_MODEL", "ViT-B-32"
+).strip()
+
+IMAGE_EMBEDDING_PRETRAINED = os.getenv(
+    "IMAGE_EMBEDDING_PRETRAINED", "laion2b_s34b_b79k"
+).strip()

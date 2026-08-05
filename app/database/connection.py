@@ -4,6 +4,7 @@ from typing import Iterator
 import psycopg # type: ignore
 from psycopg import Connection # type: ignore
 from psycopg.rows import dict_row # type: ignore
+from pgvector.psycopg import register_vector # type: ignore
 
 from app.config import DATABASE_URL
 
@@ -22,4 +23,5 @@ def database_connection() -> Iterator[Connection]:
         require_database_url(),
         row_factory=dict_row,
     ) as connection:
+        register_vector(connection)
         yield connection

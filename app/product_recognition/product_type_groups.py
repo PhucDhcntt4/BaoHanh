@@ -1,0 +1,41 @@
+import unicodedata
+
+
+# Chỉ gom những loại đã xác minh là cùng một nhóm hình ảnh.
+# Giữ nguyên giá trị đúng như trong PostgreSQL để truy vấn nhanh.
+PRODUCT_TYPE_GROUPS: tuple[frozenset[str], ...] = (
+    frozenset({
+        "GIÀY SNEAKER (MSN)",
+        "GIAY THE THAO (WTT)",
+    }),
+)
+
+
+def normalize_product_type(value: str) -> str:
+    normalized = unicodedata.normalize(
+        "NFD",
+        str(value or "").strip().upper(),
+    )
+    return "".join(
+        character
+        for character in normalized
+        if unicodedata.category(character) != "Mn"
+    ).replace("Đ", "D")
+
+
+def equivalent_product_types(product_type: str | None) -> list[str]:
+    """Trả về các product_type DB tương đương với loại AI nhận diện."""
+
+    normalized = normalize_product_type(product_type or "")
+    if not normalized:
+        return []
+
+    for group in PRODUCT_TYPE_GROUPS:
+        if normalized in {
+            normalize_product_type(value)
+            for value in group
+        }:
+            return sorted(group)
+
+    # Loại chưa khai báo nhóm vẫn giữ hành vi cũ.
+    return [str(product_type).strip()]

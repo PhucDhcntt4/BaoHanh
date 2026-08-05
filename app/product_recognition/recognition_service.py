@@ -1,9 +1,11 @@
 import json
 import threading
+from io import BytesIO
 
 import requests
 from google import genai
 from google.genai import types # type: ignore
+from PIL import Image, UnidentifiedImageError
 
 from app.config import PRODUCT_RECOGNITION_PROMPT_PATH
 from app.product_recognition.catalog_service import (
@@ -12,6 +14,7 @@ from app.product_recognition.catalog_service import (
 from app.product_recognition.models import (
     ProductMatchVerification,
     ProductRecognitionResult,
+    VectorCandidateVerification,
 )
 from app.services.product_image_store import (
     ProductImageStore,
@@ -34,6 +37,27 @@ class ProductRecognitionService:
         self._image_cache: dict[str, tuple[bytes, str]] = {}
         self._cache_lock = threading.Lock()
         self.image_store = ProductImageStore()
+
+    @staticmethod
+    def _difference_hash(image_bytes: bytes) -> int | None:
+        """Tạo dHash 64-bit, bền với resize và nén ảnh nhẹ."""
+
+        try:
+            with Image.open(BytesIO(image_bytes)) as image:
+                pixels = list(
+                    image.convert("L").resize((9, 8)).getdata()
+                )
+        except (UnidentifiedImageError, OSError, ValueError):
+            return None
+
+        value = 0
+        for row in range(8):
+            offset = row * 9
+            for column in range(8):
+                value <<= 1
+                if pixels[offset + column] > pixels[offset + column + 1]:
+                    value |= 1
+        return value
 
     def _reference_image(
         self,
@@ -230,3 +254,143 @@ class ProductRecognitionService:
             )
         except ValueError:
             return ProductMatchVerification()
+
+    def verify_vector_candidates(
+        self,
+        image_bytes: bytes,
+        mime_type: str,
+        candidate_rows: list[dict],
+        candidate_codes: list[str],
+        original_image_bytes: bytes | None = None,
+        original_mime_type: str | None = None,
+    ) -> VectorCandidateVerification:
+        """Gemini xác minh một lần trên shortlist từ pgvector."""
+
+        allowed_codes = {
+            str(code).strip().upper()
+            for code in candidate_codes
+            if str(code).strip()
+        }
+        if not allowed_codes:
+            return VectorCandidateVerification()
+
+        contents: list = [
+            (
+                "Hãy xác minh CUSTOMER IMAGE với các sản phẩm "
+                "ứng viên do hệ thống tìm kiếm ảnh cung cấp. "
+                "So sánh chi tiết hình dáng, thân, nắp, quai, "
+                "khóa, logo, đường may, mũi, đế, gót và trang trí. "
+                "Bỏ qua phông nền, người mẫu và chữ quảng cáo. "
+                "Tuy nhiên, nếu CUSTOMER ORIGINAL và một REFERENCE là "
+                "cùng một bức ảnh hoặc cùng cảnh chụp, chỉ khác do "
+                "crop, resize hoặc nén, thì đó là bằng chứng quyết định "
+                "cho product_code của REFERENCE đó. Không được chọn "
+                "mẫu khác chỉ vì cùng có phụ kiện hình con vật; "
+                "phải ưu tiên cấu trúc thân túi, nắp, miệng túi, "
+                "vị trí quai, khóa và đường may. "
+                "Màu hoặc góc chụp khác nhau không có nghĩa là "
+                "khác mẫu. Chỉ chọn một product_code khi có đủ "
+                "chi tiết đặc trưng trùng khớp. Nếu không ứng viên "
+                "nào khớp rõ, trả exact_match=false, product_code=null. "
+                "Không được trả mã ngoài danh sách: "
+                f"{sorted(allowed_codes)}."
+            ),
+            "CUSTOMER CROPPED IMAGE:",
+            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+        ]
+
+        if original_image_bytes:
+            contents.extend([
+                "CUSTOMER ORIGINAL IMAGE:",
+                types.Part.from_bytes(
+                    data=original_image_bytes,
+                    mime_type=original_mime_type or mime_type,
+                ),
+            ])
+
+        loaded_per_code: dict[str, int] = {}
+        original_hash = (
+            self._difference_hash(original_image_bytes)
+            if original_image_bytes
+            else None
+        )
+        near_duplicate: tuple[int, str] | None = None
+        for row in candidate_rows:
+            code = str(row.get("product_code") or "").strip().upper()
+            if code not in allowed_codes:
+                continue
+            if loaded_per_code.get(code, 0) >= 2:
+                continue
+            image_url = str(row.get("source_url") or "").strip()
+            if not image_url:
+                continue
+            try:
+                reference_bytes, reference_mime = self._reference_image(
+                    image_url
+                )
+            except requests.RequestException:
+                continue
+            if original_hash is not None:
+                reference_hash = self._difference_hash(reference_bytes)
+                if reference_hash is not None:
+                    distance = (original_hash ^ reference_hash).bit_count()
+                    if near_duplicate is None or distance < near_duplicate[0]:
+                        near_duplicate = (distance, code)
+            loaded_per_code[code] = loaded_per_code.get(code, 0) + 1
+            contents.extend([
+                (
+                    f"CANDIDATE product_code={code}; "
+                    f"color={row.get('color') or ''}; "
+                    f"vector_similarity={float(row.get('similarity') or 0):.4f}; "
+                    f"reference={loaded_per_code[code]}"
+                ),
+                types.Part.from_bytes(
+                    data=reference_bytes,
+                    mime_type=reference_mime,
+                ),
+            ])
+
+        if not loaded_per_code:
+            return VectorCandidateVerification()
+
+        # dHash <= 3/64 cho thấy đây gần như là cùng một ảnh,
+        # có thể chỉ khác do Telegram resize hoặc nén lại.
+        if near_duplicate is not None and near_duplicate[0] <= 3:
+            distance, matched_code = near_duplicate
+            return VectorCandidateVerification(
+                exact_match=True,
+                product_code=matched_code,
+                confidence=1.0,
+                reason=(
+                    "Near-duplicate catalog image matched by dHash "
+                    f"(distance={distance}/64)."
+                ),
+            )
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=VectorCandidateVerification,
+                temperature=0,
+            ),
+        )
+        if not response.text:
+            return VectorCandidateVerification()
+        try:
+            result = VectorCandidateVerification.model_validate_json(
+                response.text
+            )
+        except ValueError:
+            return VectorCandidateVerification()
+
+        selected_code = str(result.product_code or "").strip().upper()
+        if not result.exact_match or selected_code not in allowed_codes:
+            return VectorCandidateVerification(
+                exact_match=False,
+                confidence=result.confidence,
+                reason=result.reason,
+            )
+        result.product_code = selected_code
+        return result
