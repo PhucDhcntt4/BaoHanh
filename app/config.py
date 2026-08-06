@@ -24,6 +24,8 @@ PRODUCT_REPLY_PROMPT_PATH = PROMPT_DIR / "product_reply.txt"
 
 PRODUCT_IMAGE_DIR = DATA_DIR / "product_images"
 
+KNOWLEDGE_DIR = PROJECT_ROOT / "knowledge"
+
 PRODUCT_IMAGE_MANIFEST_PATH = (
     PRODUCT_IMAGE_DIR / "manifest.json"
 )
@@ -81,3 +83,33 @@ IMAGE_EMBEDDING_MODEL = os.getenv(
 IMAGE_EMBEDDING_PRETRAINED = os.getenv(
     "IMAGE_EMBEDDING_PRETRAINED", "laion2b_s34b_b79k"
 ).strip()
+
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().casefold() in {"1", "true", "yes", "on"}
+
+
+RAG_ENABLED = env_bool("RAG_ENABLED", False)
+RAG_EMBEDDING_PROVIDER = os.getenv(
+    "RAG_EMBEDDING_PROVIDER",
+    "auto",
+).strip().casefold()
+RAG_EMBEDDING_MODEL = os.getenv(
+    "RAG_EMBEDDING_MODEL",
+    "",
+).strip()
+RAG_EMBEDDING_DIMENSION = int(
+    os.getenv("RAG_EMBEDDING_DIMENSION", "768")
+)
+RAG_TOP_K = int(os.getenv("RAG_TOP_K", "5"))
+RAG_MIN_SIMILARITY = float(
+    os.getenv("RAG_MIN_SIMILARITY", "0.45")
+)
+RAG_MAX_CONTEXT_CHARS = int(
+    os.getenv("RAG_MAX_CONTEXT_CHARS", "6000")
+)
+RAG_CHUNK_SIZE = int(os.getenv("RAG_CHUNK_SIZE", "1200"))
+RAG_CHUNK_OVERLAP = int(os.getenv("RAG_CHUNK_OVERLAP", "180"))

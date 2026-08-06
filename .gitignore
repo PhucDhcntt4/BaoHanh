@@ -8,5 +8,8 @@ prompts/*
 # Ignore data
 data/
 
+knowledge/*
+!knowledge/.gitkeep
 # Ignore products
 products.json
+
