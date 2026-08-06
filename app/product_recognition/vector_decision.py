@@ -93,9 +93,9 @@ def group_vector_results(
 def best_distinct_products(
     candidates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Giữ kết quả tốt nhất của mỗi mã sản phẩm."""
+    """Rank a product from its best image plus supporting image matches."""
 
-    products: dict[str, dict[str, Any]] = {}
+    products: dict[str, list[dict[str, Any]]] = {}
 
     for candidate in candidates:
         product_code = str(
@@ -104,16 +104,30 @@ def best_distinct_products(
         if not product_code:
             continue
 
-        current = products.get(product_code)
-        if (
-            current is None
-            or _safe_similarity(candidate.get("similarity"))
-            > _safe_similarity(current.get("similarity"))
-        ):
-            products[product_code] = candidate
+        products.setdefault(product_code, []).append(candidate)
+
+    ranked: list[dict[str, Any]] = []
+    for product_code, product_rows in products.items():
+        product_rows.sort(
+            key=lambda item: _safe_similarity(item.get("similarity")),
+            reverse=True,
+        )
+        evidence = product_rows[:3]
+        best = _safe_similarity(evidence[0].get("similarity"))
+        mean = sum(
+            _safe_similarity(item.get("similarity")) for item in evidence
+        ) / len(evidence)
+        aggregate = (0.75 * best) + (0.25 * mean)
+        ranked.append({
+            **evidence[0],
+            "product_code": product_code,
+            "similarity": aggregate,
+            "best_similarity": best,
+            "support_count": len(evidence),
+        })
 
     return sorted(
-        products.values(),
+        ranked,
         key=lambda item: _safe_similarity(item.get("similarity")),
         reverse=True,
     )
@@ -124,8 +138,8 @@ def decide_vector_match(
 ) -> VectorDecision:
     """Tạo quyết định từ danh sách kết quả pgvector."""
 
-    grouped_by_color = group_vector_results(rows)
-    distinct_products = best_distinct_products(grouped_by_color)
+    # Keep evidence from multiple angles instead of retaining one image/color.
+    distinct_products = best_distinct_products(rows)
     max_candidates = max(1, VECTOR_MAX_CANDIDATES)
     candidates = distinct_products[:max_candidates]
 

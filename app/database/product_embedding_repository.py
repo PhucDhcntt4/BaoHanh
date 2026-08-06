@@ -94,6 +94,8 @@ class ProductEmbeddingRepository:
                 p.product_type,
                 pi.id AS product_image_id,
                 pi.color,
+                pi.image_order,
+                pi.is_featured,
                 pi.local_path,
                 pi.source_url,
 

@@ -2,12 +2,14 @@ import io
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, HTTPException, Query, UploadFile
 from fastapi.responses import HTMLResponse
 from openpyxl import load_workbook  # type: ignore
 from pydantic import BaseModel
 
 from app.services.product_sync_service import product_sync_manager
+from app.database.connection import database_connection
+from app.config import IMAGE_EMBEDDING_MODEL, IMAGE_EMBEDDING_PRETRAINED
 
 
 router = APIRouter(prefix="/admin/products", tags=["Product Admin"])
@@ -106,6 +108,97 @@ async def import_excel(
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     return _start_job(skus, background_tasks)
+
+
+@router.get("/api/catalog")
+def synchronized_products(
+    search: str = Query(default="", max_length=100),
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    keyword = search.strip()
+    where = ""
+    search_parameters: list[object] = []
+    if keyword:
+        where = """
+            WHERE p.product_code ILIKE %s
+               OR p.title ILIKE %s
+               OR p.product_type ILIKE %s
+        """
+        pattern = f"%{keyword}%"
+        search_parameters = [pattern, pattern, pattern]
+
+    with database_connection() as connection:
+        total = connection.execute(
+            f"SELECT COUNT(*) AS count FROM products p {where}",
+            search_parameters,
+        ).fetchone()["count"]
+
+        rows = connection.execute(
+            f"""
+            SELECT
+                p.product_code,
+                p.title,
+                p.product_type,
+                p.status,
+                p.updated_at,
+                COUNT(DISTINCT pv.id) AS variant_count,
+                COUNT(DISTINCT pi.id) FILTER (
+                    WHERE pi.is_active = TRUE
+                ) AS image_count,
+                COUNT(DISTINCT pi.id) FILTER (
+                    WHERE pi.is_active = TRUE
+                      AND COALESCE(pi.local_path, '') <> ''
+                ) AS local_image_count,
+                COUNT(DISTINCT pie.product_image_id) AS embedding_count,
+                STRING_AGG(DISTINCT pc.color, ', ' ORDER BY pc.color)
+                    AS colors
+            FROM products p
+            LEFT JOIN product_variants pv ON pv.product_id = p.id
+            LEFT JOIN product_images pi ON pi.product_id = p.id
+            LEFT JOIN product_image_embeddings pie
+                ON pie.product_image_id = pi.id
+               AND pie.model_name = %s
+               AND pie.pretrained_name = %s
+            LEFT JOIN product_colors pc ON pc.product_id = p.id
+            {where}
+            GROUP BY p.id
+            ORDER BY p.updated_at DESC, p.product_code
+            LIMIT %s OFFSET %s
+            """,
+            [
+                IMAGE_EMBEDDING_MODEL,
+                IMAGE_EMBEDDING_PRETRAINED,
+                *search_parameters,
+                limit,
+                offset,
+            ],
+        ).fetchall()
+
+    products = []
+    for row in rows:
+        item = dict(row)
+        local_count = int(item["local_image_count"] or 0)
+        embedding_count = int(item["embedding_count"] or 0)
+        item["ai_ready"] = (
+            item["status"] == "ACTIVE"
+            and local_count > 0
+            and embedding_count >= local_count
+        )
+        item["updated_at"] = (
+            item["updated_at"].isoformat()
+            if item.get("updated_at")
+            else None
+        )
+        products.append(item)
+
+    return {
+        "total": int(total),
+        "limit": limit,
+        "offset": offset,
+        "embedding_model": IMAGE_EMBEDDING_MODEL,
+        "products": products,
+    }
 
 
 @router.get("/api/jobs/{job_id}")

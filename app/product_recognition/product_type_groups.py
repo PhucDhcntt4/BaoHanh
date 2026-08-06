@@ -6,7 +6,15 @@ import unicodedata
 PRODUCT_TYPE_GROUPS: tuple[frozenset[str], ...] = (
     frozenset({
         "GIÀY SNEAKER (MSN)",
+        "GIÀY SNEAKER (WSN)",
         "GIAY THE THAO (WTT)",
+        "GIAY THE THAO (MTT)",
+        "GIAY THE THAO (KTT)",
+
+    }),
+    frozenset({
+        "TUI XACH NHO (TXN)",
+        "VI DI TIEC (VDT)",
     }),
 )
 

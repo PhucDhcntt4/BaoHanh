@@ -22,6 +22,8 @@ from app.services.product_image_store import (
 
 
 class ProductRecognitionService:
+    VECTOR_REFERENCES_PER_PRODUCT = 4
+
     def __init__(
         self,
         client: genai.Client,
@@ -308,6 +310,66 @@ class ProductRecognitionService:
                 ),
             ])
 
+        rows_per_code: dict[str, list[dict]] = {
+            code: [] for code in allowed_codes
+        }
+        for row in candidate_rows:
+            code = str(row.get("product_code") or "").strip().upper()
+            if code in allowed_codes and row.get("source_url"):
+                rows_per_code[code].append(row)
+
+        # Give Gemini diverse evidence: first one strong image per color,
+        # then fill the remaining slots with other high-scoring angles.
+        selected_rows: list[dict] = []
+        for candidate_code in candidate_codes:
+            code = str(candidate_code).strip().upper()
+            rows_for_code = rows_per_code.get(code, [])
+            rows_for_code.sort(
+                key=lambda item: float(item.get("similarity") or 0),
+                reverse=True,
+            )
+            chosen: list[dict] = []
+            seen_urls: set[str] = set()
+            seen_colors: set[str] = set()
+            for row in rows_for_code:
+                url = str(row.get("source_url") or "").strip()
+                color = str(row.get("color") or "").strip().casefold()
+                if not url or url in seen_urls or color in seen_colors:
+                    continue
+                chosen.append(row)
+                seen_urls.add(url)
+                seen_colors.add(color)
+                if len(chosen) >= self.VECTOR_REFERENCES_PER_PRODUCT:
+                    break
+            for row in rows_for_code:
+                if len(chosen) >= self.VECTOR_REFERENCES_PER_PRODUCT:
+                    break
+                url = str(row.get("source_url") or "").strip()
+                if not url or url in seen_urls:
+                    continue
+                chosen.append(row)
+                seen_urls.add(url)
+
+            # The global vector LIMIT may contain fewer than four rows for a
+            # candidate. Complete its evidence from the official catalog so a
+            # correct code is not judged from only one accidental angle.
+            if len(chosen) < self.VECTOR_REFERENCES_PER_PRODUCT:
+                product = self.catalog.public_info(code) or {}
+                for image_url in product.get("image_urls") or []:
+                    if len(chosen) >= self.VECTOR_REFERENCES_PER_PRODUCT:
+                        break
+                    url = str(image_url or "").strip()
+                    if not url or url in seen_urls:
+                        continue
+                    chosen.append({
+                        "product_code": code,
+                        "source_url": url,
+                        "color": "",
+                        "similarity": 0.0,
+                    })
+                    seen_urls.add(url)
+            selected_rows.extend(chosen)
+
         loaded_per_code: dict[str, int] = {}
         original_hash = (
             self._difference_hash(original_image_bytes)
@@ -315,11 +377,9 @@ class ProductRecognitionService:
             else None
         )
         near_duplicate: tuple[int, str] | None = None
-        for row in candidate_rows:
+        for row in selected_rows:
             code = str(row.get("product_code") or "").strip().upper()
             if code not in allowed_codes:
-                continue
-            if loaded_per_code.get(code, 0) >= 2:
                 continue
             image_url = str(row.get("source_url") or "").strip()
             if not image_url:

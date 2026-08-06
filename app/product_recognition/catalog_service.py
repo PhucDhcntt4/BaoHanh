@@ -1,5 +1,4 @@
 import json
-import logging
 import re
 import unicodedata
 from pathlib import Path
@@ -7,9 +6,6 @@ from typing import Any
 
 from app.config import PRODUCTS_PATH, PRODUCT_CATALOG_SOURCE
 from app.database.product_repository import ProductRepository
-
-
-logger = logging.getLogger("uvicorn.error")
 
 
 class ProductCatalogService:
@@ -23,7 +19,10 @@ class ProductCatalogService:
         if self.source not in {"json", "database"}:
             raise ValueError("Catalog source must be 'json' or 'database'")
         self.repository = ProductRepository()
-        self._products = self._load()
+        # Runtime database mode must not require products.json to exist or be
+        # valid. JSON is loaded only when explicitly selected (for local
+        # tooling, comparison or import workflows).
+        self._products = self._load() if self.source == "json" else []
         self._by_code: dict[str, list[dict[str, Any]]] = {}
         for product in self._products:
             for code in self.product_codes(product):
@@ -127,16 +126,11 @@ class ProductCatalogService:
             return []
 
         if self.source == "database":
-            try:
-                return self.repository.reference_products(
-                    product_type=canonical_type,
-                    limit=limit,
-                    images_per_product=images_per_product,
-                )
-            except Exception:
-                logger.exception(
-                    "Database catalog reference lookup failed; using JSON"
-                )
+            return self.repository.reference_products(
+                product_type=canonical_type,
+                limit=limit,
+                images_per_product=images_per_product,
+            )
 
         normalized_type = self._normalize_search_text(
             canonical_type or ""
@@ -204,12 +198,7 @@ class ProductCatalogService:
         """Lấy danh sách productType thật và duy nhất từ catalog."""
 
         if self.source == "database":
-            try:
-                return self.repository.product_types(active_only)
-            except Exception:
-                logger.exception(
-                    "Database catalog product types failed; using JSON"
-                )
+            return self.repository.product_types(active_only)
 
         values = {
             str(product.get("productType") or "").strip()
@@ -278,12 +267,7 @@ class ProductCatalogService:
         limit: int = 5,
     ) -> list[dict[str, Any]]:
         if self.source == "database":
-            try:
-                return self.repository.search(query, active_only, limit)
-            except Exception:
-                logger.exception(
-                    "Database catalog search failed; using JSON"
-                )
+            return self.repository.search(query, active_only, limit)
 
         normalized_query = self._normalize_search_text(query).strip()
         if not normalized_query:
@@ -369,12 +353,7 @@ class ProductCatalogService:
         product_code: str,
     ) -> dict[str, Any] | None:
         if self.source == "database":
-            try:
-                return self.repository.public_info(product_code)
-            except Exception:
-                logger.exception(
-                    "Database catalog product lookup failed; using JSON"
-                )
+            return self.repository.public_info(product_code)
 
         related_products = self.get_all(product_code)
         if not related_products:

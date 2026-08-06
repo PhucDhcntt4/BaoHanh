@@ -8,6 +8,7 @@ from google.genai import types # type: ignore
 from app.config import (
     PRODUCT_REPLY_PROMPT_PATH,
     PRODUCT_VECTOR_SEARCH_ENABLED,
+    VECTOR_MIN_MARGIN,
     VECTOR_SEARCH_LIMIT,
 )
 from app.database.product_embedding_repository import (
@@ -140,6 +141,107 @@ class ProductImageHandler:
             verification.confidence,
             verification.reason,
         )
+
+# Bộ phân loại chỉ là một công cụ tăng tốc tìm kiếm. Nếu mọi ứng viên trong
+# loại sản phẩm được lọc đều bị từ chối, hãy thử tìm kiếm trên toàn bộ
+# danh mục thay vì coi bộ lọc đó là sự thật trong kinh doanh.
+        if (
+            filtered_types
+            and (
+                not verification.exact_match
+                or not verification.product_code
+                or verification.confidence < 0.90
+            )
+        ):
+            rows = self.embedding_repository.search(
+                embedding=embedding,
+                model_name=self.embedding_service.model_name,
+                pretrained_name=self.embedding_service.pretrained_name,
+                product_type=None,
+                limit=VECTOR_SEARCH_LIMIT,
+            )
+            decision = decide_vector_match(rows)
+            logger.info(
+                "VECTOR GLOBAL RETRY status=%s top=%.4f margin=%.4f "
+                "values=%s",
+                decision.status,
+                decision.top_similarity,
+                decision.margin,
+                [
+                    {
+                        "code": item["product_code"],
+                        "color": item.get("color"),
+                        "similarity": round(float(item["similarity"]), 4),
+                    }
+                    for item in decision.candidates
+                ],
+            )
+            if decision.status != "no_match":
+                candidate_codes = [
+                    item["product_code"] for item in decision.candidates
+                ]
+                verification = self.recognition.verify_vector_candidates(
+                    image_bytes=image_bytes,
+                    mime_type=mime_type,
+                    candidate_rows=rows,
+                    candidate_codes=candidate_codes,
+                    original_image_bytes=original_image_bytes,
+                    original_mime_type=original_mime_type,
+                )
+                logger.info(
+                    "VECTOR GLOBAL VERIFIED exact=%s code=%s "
+                    "confidence=%.3f reason=%s",
+                    verification.exact_match,
+                    verification.product_code,
+                    verification.confidence,
+                    verification.reason,
+                )
+
+        # A near tie means the joint verifier is comparing very similar
+        # products. If it rejects the vector leader and selects another code,
+        # validate the leader alone with its complete catalog image set before
+        # committing to the other product.
+        top_candidate = decision.best_candidate
+        top_code = (
+            str(top_candidate.get("product_code") or "").strip().upper()
+            if top_candidate
+            else ""
+        )
+        selected_code = str(
+            verification.product_code or ""
+        ).strip().upper()
+        if (
+            verification.exact_match
+            and selected_code
+            and top_code
+            and selected_code != top_code
+            and decision.margin < VECTOR_MIN_MARGIN
+        ):
+            top_verification = self.recognition.verify_exact_match(
+                image_bytes=original_image_bytes or image_bytes,
+                mime_type=original_mime_type or mime_type,
+                product_code=top_code,
+            )
+            logger.info(
+                "VECTOR TOP RECHECK code=%s exact=%s confidence=%.3f "
+                "reason=%s",
+                top_code,
+                top_verification.exact_match,
+                top_verification.confidence,
+                top_verification.reason,
+            )
+            if (
+                top_verification.exact_match
+                and top_verification.confidence >= 0.90
+            ):
+                verification.exact_match = True
+                verification.product_code = top_code
+                verification.confidence = top_verification.confidence
+                verification.reason = (
+                    "Vector leader confirmed by dedicated recheck: "
+                    f"{top_verification.reason}"
+                )
+
         if (
             not verification.exact_match
             or not verification.product_code

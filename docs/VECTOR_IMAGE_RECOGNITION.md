@@ -1,181 +1,221 @@
-# Tóm tắt hệ thống nhận diện sản phẩm
+Kết quả này đi qua 3 lớp khác nhau: **Gemini phân loại ảnh → OpenCLIP tính độ giống → Gemini xác minh mã cuối cùng**.
 
-## 1. Mục tiêu
-
-Hệ thống nhận ảnh khách gửi qua Telegram, tìm các sản phẩm giống nhất trong catalog rồi dùng Gemini xác minh lần cuối.
-
-Thông tin như tên sản phẩm, giá, màu, size và tồn kho luôn được lấy từ PostgreSQL, không suy đoán từ hình ảnh.
-
-## 2. Quy trình hoạt động
+## 1. Phân loại ảnh và vùng sản phẩm
 
 ```text
-Ảnh khách gửi
-→ xác định vùng sản phẩm
-→ crop ảnh
-→ OpenCLIP tạo vector embedding
-→ pgvector tìm ảnh giống nhất
-→ chọn tối đa 3 mã sản phẩm
-→ dHash kiểm tra ảnh gần-trùng
-→ Gemini xác minh sản phẩm
-→ lấy thông tin từ PostgreSQL
-→ gửi kết quả và album qua Telegram
+intent=product_lookup
+product_type=DEP CAO GOT (WDC)
+bbox=[360, 200, 770, 840]
 ```
 
-## 3. Vai trò của từng thành phần
+Gemini kết luận:
 
-### OpenCLIP
+- Đây là ảnh khách muốn tìm sản phẩm: `product_lookup`.
+- Loại sản phẩm: `DEP CAO GOT (WDC)`.
+- Loại này phải tồn tại trong danh sách `product_type` lấy từ PostgreSQL.
 
-Chuyển ảnh thành vector gồm 512 số.
+`bbox` có định dạng:
 
-Các ảnh có hình dáng và đặc điểm gần giống nhau sẽ có vector nằm gần nhau.
+```text
+[y_min, x_min, y_max, x_max]
+```
 
-### pgvector
+Theo thang từ `0–1000`, không phải pixel:
 
-So sánh vector ảnh khách với vector ảnh catalog bằng cosine similarity:
+```text
+y: 360 → 770 = từ 36% đến 77% chiều cao
+x: 200 → 840 = từ 20% đến 84% chiều rộng
+```
+
+Hệ thống cộng thêm khoảng đệm 12% xung quanh sản phẩm rồi crop.
+
+```text
+original_bytes=239469
+recognition_bytes=108281
+```
+
+Ảnh gốc khoảng 239 KB, sau crop và nén JPEG còn khoảng 108 KB. OpenCLIP sẽ phân tích ảnh đã crop này.
+
+## 2. Cách tính điểm vector
+
+OpenCLIP chuyển ảnh khách và từng ảnh catalog thành vector 512 chiều. Các vector được chuẩn hóa rồi pgvector tính cosine:
 
 ```text
 similarity = 1 - cosine_distance
 ```
 
-Điểm càng cao thì ảnh càng giống nhau. Tuy nhiên, điểm `0.70` không có nghĩa là đúng 70%.
+Kết quả:
 
-### Crop ảnh
+| Vị trí | Mã    | Màu của ảnh tham chiếu | Similarity |
+| -----: | ----- | ---------------------- | ---------: |
+|      1 | D81V9 | Nâu                    |     0.7304 |
+|      2 | D32I6 | Kem                    |     0.6711 |
+|      3 | DTHC2 | Đỏ                     |     0.5641 |
 
-Ảnh cần được crop để loại bỏ người mẫu, chữ quảng cáo, phông nền hoặc các vật thể không liên quan.
+Điểm `0.7304` không có nghĩa là “đúng 73,04%”. Nó chỉ cho biết vector ảnh D81V9 gần ảnh khách hơn hai mã còn lại.
 
-Embedding sau đó tập trung vào chính sản phẩm như thân túi, quai, khóa, đế hoặc gót giày.
+Trước khi lấy ba kết quả này, hệ thống:
 
-### dHash
+1. Chỉ tìm sản phẩm `ACTIVE`.
+2. Ưu tiên nhóm `DEP CAO GOT (WDC)`.
+3. Lấy nhiều ảnh gần nhất từ pgvector.
+4. Giữ ảnh tốt nhất của mỗi `mã + màu`.
+5. Giữ kết quả tốt nhất của mỗi mã.
+6. Chọn tối đa 3 mã.
 
-dHash kiểm tra ảnh khách có gần như trùng hoàn toàn với ảnh catalog hay không.
-
-Nếu khoảng cách hash nhỏ hơn hoặc bằng `3/64`, hệ thống có thể chọn trực tiếp sản phẩm đó mà không cần Gemini.
-
-dHash chỉ phù hợp với cùng một ảnh bị resize hoặc nén, không phù hợp với ảnh chụp ở góc khác.
-
-### Gemini
-
-Gemini nhận ảnh khách và tối đa ba mã sản phẩm ứng viên.
-
-Gemini so sánh các chi tiết như:
-
-- Hình dáng sản phẩm.
-- Quai, khóa, logo.
-- Đường may.
-- Mũi, đế, gót.
-- Chi tiết trang trí.
-
-Gemini chỉ được chọn mã nằm trong danh sách ứng viên và phải có độ tin cậy từ `0.90` trở lên.
-
-## 4. Cách chọn ứng viên
-
-pgvector trả về danh sách ảnh, nhưng một sản phẩm có thể có nhiều ảnh.
-
-Hệ thống sẽ:
-
-1. Giữ ảnh tốt nhất của từng `product_code + color`.
-2. Giữ biến thể có điểm cao nhất của từng `product_code`.
-3. Chọn tối đa ba mã sản phẩm để Gemini xác minh.
-
-Ví dụ:
+## 3. Cách tính `margin`
 
 ```text
-FE04 Vàng  0.7378
-FE04 Vàng  0.7100
-TM32 Bò    0.6811
-KQ01 Kem   0.6366
+top = 0.7304
+second = 0.6711
+margin = top - second
+       = 0.7304 - 0.6711
+       = 0.0593
 ```
 
-Sau khi gom:
+Margin cho biết mã đứng đầu cách mã thứ hai bao xa.
+
+- Margin lớn: mã đầu nổi bật hơn.
+- Margin nhỏ: hai mã khá gần nhau, chưa nên kết luận chỉ dựa vào vector.
+
+Trong trường hợp này:
 
 ```text
-FE04  0.7378
-TM32  0.6811
-KQ01  0.6366
+margin=0.0593
 ```
 
-## 5. Quy tắc quyết định của vector
-
-### Không tìm thấy
+Trong khi ngưỡng tự động mạnh là:
 
 ```text
-top_similarity < 0.35
+VECTOR_MIN_MARGIN=0.08
 ```
 
-Hệ thống không trả sản phẩm cho khách.
+Vì `0.0593 < 0.08`, D81V9 chưa đủ nổi bật để vector tự kết luận.
 
-### Cần Gemini xác minh
+## 4. Vì sao là `needs_verification`?
+
+Code có ba trạng thái:
 
 ```text
-top_similarity >= 0.35
+top < VECTOR_MIN_SIMILARITY
+→ no_match
+
+top >= 0.96 và margin >= 0.08
+→ auto_accept
+
+Các trường hợp còn lại
+→ needs_verification
 ```
 
-Nhưng chưa đủ điều kiện tự động chấp nhận.
-
-### Kết quả rất mạnh
+Kết quả hiện tại:
 
 ```text
-top_similarity >= 0.96
-margin >= 0.08
+top=0.7304
+margin=0.0593
+status=needs_verification
+```
+
+Nó không đạt điều kiện mạnh:
+
+```text
+0.7304 < 0.96
+0.0593 < 0.08
+```
+
+Vì vậy phải gửi ba ứng viên cho Gemini kiểm tra.
+
+Lưu ý: mặc định trong code, `VECTOR_MIN_SIMILARITY=0.80`. Nhưng log này vẫn là `needs_verification` ở mức `0.7304`, chứng tỏ `.env` của bạn đang đặt ngưỡng nhỏ hơn hoặc bằng `0.7304`, khả năng là:
+
+```env
+VECTOR_MIN_SIMILARITY=0.35
+```
+
+## 5. Gemini xác minh mã cuối cùng
+
+```text
+exact=True
+code=D81V9
+confidence=1.000
+```
+
+Gemini được nhận:
+
+- Ảnh khách đã crop.
+- Ảnh khách gốc.
+- Tối đa hai ảnh tham chiếu cho mỗi mã.
+- Danh sách mã được phép chọn: D81V9, D32I6, DTHC2.
+
+Gemini so sánh các chi tiết:
+
+```text
+braided strap     = quai tết
+wide textured strap = quai bản rộng có họa tiết
+square toe        = mũi vuông
+spherical heel    = gót hình cầu
+```
+
+Nó kết luận các đặc điểm này khớp với D81V9.
+
+`confidence=1.000` ở đây là confidence do Gemini tự trả về, không phải kết quả của công thức cosine. Nó cũng không phải xác suất chính xác 100%, nhưng đã vượt ngưỡng hệ thống yêu cầu:
+
+```text
+confidence >= 0.90
+```
+
+Đây không phải kết quả dHash. Nếu dHash khớp, reason sẽ có dạng:
+
+```text
+Near-duplicate catalog image matched by dHash
+```
+
+## 6. Vì sao ứng viên là màu Nâu nhưng album đầu tiên lại là màu Kem?
+
+Vector tìm thấy ảnh gần nhất:
+
+```text
+D81V9 - Nâu - 0.7304
+```
+
+Nhưng sau khi xác minh, hệ thống chỉ giữ:
+
+```text
+product_code=D81V9
+```
+
+Thông tin màu `Nâu` không được truyền tiếp sang phần gửi album.
+
+Log:
+
+```text
+color=None
+first_url=...D81V9-kem-1.jpg
+```
+
+Có nghĩa là:
+
+- Khách không ghi màu trong caption.
+- Câu trả lời AI cũng không chỉ định màu.
+- Hệ thống lấy 4 ảnh mặc định đầu tiên của D81V9.
+- Ảnh đầu tiên trong PostgreSQL đang là màu Kem.
+
+Nhận diện mã sản phẩm vẫn đúng, nhưng album có thể không đúng màu của ảnh khách. Nếu muốn gửi đúng album màu Nâu, cần truyền thêm `matched_color` từ kết quả vector đến `_send_product_photos()`.
+
+## 7. Thời gian xử lý
+
+```text
+download=3.040s
+ai=10.928s
+total=17.764s
 ```
 
 Trong đó:
 
-```text
-margin = điểm mã đứng đầu - điểm mã đứng thứ hai
-```
+- Tải ảnh Telegram: `3.040s`.
+- Gemini phân loại, xác minh và tạo câu trả lời: `10.928s`.
+- Phần còn lại khoảng `3.796s`: crop, OpenCLIP, pgvector và gửi Telegram.
 
-Hiện tại, kể cả trường hợp này hệ thống vẫn dùng Gemini để đảm bảo an toàn.
+Ba lần gửi Telegram là:
 
-## 6. Dữ liệu embedding
-
-Mỗi ảnh catalog được lưu trong bảng `product_images`.
-
-Vector của ảnh được lưu trong `product_image_embeddings`, gồm:
-
-- Model OpenCLIP.
-- Bộ pretrained.
-- Vector 512 chiều.
-- Checksum SHA-256 của ảnh.
-
-Checksum chỉ dùng để kiểm tra ảnh có thay đổi hay không, không dùng để đo độ giống nhau.
-
-Ảnh khách và ảnh catalog bắt buộc phải sử dụng cùng model và cùng cách preprocess.
-
-## 7. Khi có sản phẩm mới
-
-```text
-Lấy dữ liệu Shopify
-→ import vào PostgreSQL
-→ tải ảnh về máy
-→ tạo embedding cho ảnh mới
-→ lưu vector vào pgvector
-```
-
-Lệnh tạo embedding:
-
-```powershell
-python -m app.scripts.build_product_image_embeddings
-```
-
-Ảnh không thay đổi và đã có đúng embedding sẽ được bỏ qua.
-
-## 8. Chỉ số cần theo dõi
-
-Không nên chỉ nhìn mã đứng đầu. Cần đánh giá:
-
-- **Top-1 accuracy:** Mã đúng có đứng đầu không.
-- **Recall@3:** Mã đúng có nằm trong ba ứng viên không.
-- **Gemini accuracy:** Gemini có chọn đúng trong shortlist không.
-- **False positive:** Hệ thống có trả nhầm sản phẩm ngoài catalog không.
-- **Thời gian xử lý:** Embedding, vector search, Gemini và tổng thời gian.
-
-## 9. Nguyên tắc quan trọng
-
-- Vector search chỉ dùng để tìm ứng viên, không phải kết luận cuối.
-- Không xem similarity là xác suất.
-- Không giảm ngưỡng chỉ để một ảnh test nhận diện thành công.
-- Gemini không được tự tạo mã sản phẩm ngoài shortlist.
-- Không suy đoán giá, màu, size hoặc tồn kho từ ảnh.
-- Không chắc chắn thì nên từ chối thay vì trả sai.
-- Nếu vector search gặp lỗi, hệ thống vẫn giữ luồng Gemini cũ làm fallback.
+1. Tin nhắn thông tin sản phẩm: `0.894s`.
+2. Album 4 ảnh: `0.963s`.
+3. Câu hỏi tư vấn tiếp: `0.930s`.
