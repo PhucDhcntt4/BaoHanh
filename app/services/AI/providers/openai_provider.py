@@ -31,6 +31,7 @@ from app.product_recognition.product_tools import (
 from app.services.AI.base import AIService
 from app.services.product_image_store import ProductImageStore
 from app.services.policy_tools import (
+    search_customer_care_knowledge,
     search_warranty_policy,
 )
 
@@ -71,6 +72,9 @@ class OpenAIProvider(AIService):
             str, Callable[..., dict[str, Any]]
         ] = {
             "search_warranty_policy": search_warranty_policy,
+            "search_customer_care_knowledge": (
+                search_customer_care_knowledge
+            ),
             "search_products": search_products,
             "get_product_info": get_product_info,
         }
@@ -527,6 +531,12 @@ class OpenAIProvider(AIService):
             tool(
                 "search_warranty_policy",
                 "Tra cứu chính sách bảo hành và đổi hàng.",
+                {"question": string},
+                ["question"],
+            ),
+            tool(
+                "search_customer_care_knowledge",
+                "Tra cứu hướng dẫn chăm sóc khách hàng chính thức.",
                 {"question": string},
                 ["question"],
             ),

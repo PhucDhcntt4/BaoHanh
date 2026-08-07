@@ -25,6 +25,7 @@ from app.product_recognition.image_intent_service import (
 )
 from app.services.AI.base import AIService
 from app.services.policy_tools import (
+    search_customer_care_knowledge,
     search_warranty_policy,
 )
 
@@ -72,6 +73,7 @@ class GeminiProvider(AIService):
 
         self.tools = [
             search_warranty_policy,
+            search_customer_care_knowledge,
             search_products,
             get_product_info,
         ]

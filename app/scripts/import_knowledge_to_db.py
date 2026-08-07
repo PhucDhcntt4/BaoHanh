@@ -13,7 +13,10 @@ from app.config import (
 from app.database.connection import database_connection
 from app.database.knowledge_repository import KnowledgeRepository
 from app.knowledge.chunking import TextChunk, chunk_text
-from app.knowledge.embedding_service import TextEmbeddingService
+from app.knowledge.embedding_service import (
+    TextEmbeddingService,
+    create_text_embedding_service,
+)
 
 
 SCHEMA_PATH = PROJECT_ROOT / "db_postgre" / "003_customer_care_rag.sql"
@@ -136,6 +139,9 @@ def import_file(
         not force
         and state
         and state["source_checksum"] == source_checksum
+        and state["embedding_provider"] == (
+            embedding_service.provider_name
+        )
         and state["embedding_model"] == embedding_service.model
         and state["embedding_dimension"] == embedding_service.dimension
         and state["is_active"]
@@ -171,6 +177,7 @@ def import_file(
         title=title,
         category=resolved_category,
         source_checksum=source_checksum,
+        embedding_provider=embedding_service.provider_name,
         embedding_model=embedding_service.model,
         embedding_dimension=embedding_service.dimension,
         metadata={"file_name": path.name},
@@ -229,7 +236,13 @@ def main() -> None:
 
     initialize_schema()
     repository = KnowledgeRepository()
-    embedding_service = TextEmbeddingService()
+    embedding_service = create_text_embedding_service()
+    print(
+        "Embedding: "
+        f"provider={embedding_service.provider_name}, "
+        f"model={embedding_service.model}, "
+        f"dimension={embedding_service.dimension}"
+    )
     imported = unchanged = skipped = 0
     for path in files:
         result = import_file(

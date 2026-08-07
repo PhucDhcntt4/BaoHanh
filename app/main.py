@@ -10,6 +10,7 @@ from app.models import (
 )
 from app.services.AI.base import AIService
 from app.services.AI.factory import create_ai_service
+from app.config import RAG_ENABLED
 
 
 load_dotenv()
@@ -79,6 +80,7 @@ def health():
         ),
         "ai_model": ai_service.model if ai_service else None,
         "telegram_ready": telegram_ready(),
+        "rag_enabled": RAG_ENABLED,
     }
 
 

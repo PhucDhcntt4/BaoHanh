@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
     title VARCHAR(500) NOT NULL,
     category VARCHAR(100) NOT NULL DEFAULT 'customer_care',
     source_checksum VARCHAR(64) NOT NULL,
+    embedding_provider VARCHAR(50) NOT NULL DEFAULT 'gemini',
     embedding_model VARCHAR(150) NOT NULL,
     embedding_dimension INTEGER NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::JSONB,
@@ -15,6 +16,10 @@ CREATE TABLE IF NOT EXISTS knowledge_documents (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+ALTER TABLE knowledge_documents
+ADD COLUMN IF NOT EXISTS embedding_provider VARCHAR(50)
+NOT NULL DEFAULT 'gemini';
 
 CREATE TABLE IF NOT EXISTS knowledge_chunks (
     id BIGSERIAL PRIMARY KEY,
