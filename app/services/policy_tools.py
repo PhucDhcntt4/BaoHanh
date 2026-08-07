@@ -29,6 +29,11 @@ def search_warranty_policy(question: str) -> dict[str, Any]:
 
 def search_customer_care_knowledge(question: str) -> dict[str, Any]:
     """Tra cứu hướng dẫn chăm sóc khách hàng chính thức."""
+    return search_knowledge_base(question)
+
+
+def search_knowledge_base(question: str) -> dict[str, Any]:
+    """Tra cứu toàn bộ kho tri thức RAG cho mọi chủ đề đã được nạp."""
     global knowledge_service
 
     if not RAG_ENABLED:

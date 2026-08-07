@@ -6,6 +6,7 @@ import re
 import unicodedata
 from collections import deque
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import ( # type: ignore
     APIRouter,
@@ -126,7 +127,23 @@ def _normalize_text(value: Any) -> str:
 def _remove_image_urls(value: Any) -> str:
     """Không cho URL ảnh catalog xuất hiện trong tin nhắn Telegram."""
 
-    text = re.sub(r"https?://\S+", "", str(value or ""))
+    def remove_catalog_image(match: re.Match[str]) -> str:
+        raw_url = match.group(0)
+        parsed = urlparse(raw_url.rstrip(".,;:!?)]}"))
+        hostname = (parsed.hostname or "").casefold()
+        image_path = parsed.path.casefold()
+        is_catalog_cdn = hostname == "cdn.shopify.com"
+        is_image_file = bool(re.search(
+            r"\.(?:jpe?g|png|webp|gif|bmp|avif)$",
+            image_path,
+        ))
+        return "" if is_catalog_cdn or is_image_file else raw_url
+
+    text = re.sub(
+        r"https?://\S+",
+        remove_catalog_image,
+        str(value or ""),
+    )
     lines = [
         line.rstrip()
         for line in text.splitlines()

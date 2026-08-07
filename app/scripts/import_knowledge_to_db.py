@@ -3,7 +3,11 @@ import hashlib
 import re
 from pathlib import Path
 from typing import Any
+from pypdf import PdfReader # type: ignore
+import time
+from tqdm import tqdm # type: ignore
 
+from google.genai.errors import ClientError # type: ignore
 from app.config import (
     KNOWLEDGE_DIR,
     PROJECT_ROOT,
@@ -20,7 +24,7 @@ from app.knowledge.embedding_service import (
 
 
 SCHEMA_PATH = PROJECT_ROOT / "db_postgre" / "003_customer_care_rag.sql"
-SUPPORTED_SUFFIXES = {".md", ".txt"}
+SUPPORTED_SUFFIXES = {".md", ".txt",".pdf"}
 CATEGORY_PATTERN = re.compile(
     r"^[a-z0-9][a-z0-9_-]{0,99}$"
 )
@@ -30,7 +34,7 @@ def normalize_category(value: str) -> str:
 
     if not CATEGORY_PATTERN.fullmatch(category):
         raise ValueError(
-            "tên catarogy chỉ đđượcchuws chữ thường không dấu,số, dấu gạch dưới hoặc ngang"
+    "RAG hiện chỉ hỗ trợ file .txt, .md và .pdf"
         )
 
     return category
@@ -58,13 +62,52 @@ def discover_files(source: Path) -> list[Path]:
         )
     )
 
+def read_pdf(path: Path) -> str:
+    reader = PdfReader(str(path))
+    pages: list[str] = []
+
+    for page_number, page in enumerate(
+        reader.pages,
+        start=1,
+    ):
+        page_text = (page.extract_text() or "").strip()
+
+        if not page_text:
+            continue
+
+        pages.append(
+            f"## Trang {page_number}\n\n{page_text}"
+        )
+
+    if not pages:
+        raise ValueError(
+            f"PDF không có văn bản để trích xuất: {path}. "
+            "File có thể là PDF scan và cần OCR."
+        )
+
+    return "\n\n".join(pages)
+
+
+def read_document(path: Path) -> str:
+    suffix = path.suffix.casefold()
+
+    if suffix in {".txt", ".md"}:
+        return path.read_text(
+            encoding="utf-8"
+        ).strip()
+
+    if suffix == ".pdf":
+        return read_pdf(path).strip()
+
+    raise ValueError(
+        f"Định dạng tài liệu chưa được hỗ trợ: {suffix}"
+    )
 
 def document_title(path: Path, content: str) -> str:
     match = re.search(r"^#\s+(.+?)\s*$", content, flags=re.MULTILINE)
     if match:
         return match.group(1).strip()
     return path.stem.replace("_", " ").replace("-", " ").strip()
-
 
 def document_category(
     path: Path,
@@ -115,15 +158,66 @@ def embedding_text(title: str, chunk: TextChunk) -> str:
 def embed_in_batches(
     embedding_service: TextEmbeddingService,
     texts: list[str],
-    batch_size: int = 50,
+    batch_size: int = 25,
+    delay_seconds: float = 16,
+    max_retries: int = 5,
 ) -> list[list[float]]:
     result: list[list[float]] = []
-    for start in range(0, len(texts), batch_size):
-        result.extend(
-            embedding_service.embed_documents(
-                texts[start:start + batch_size]
-            )
-        )
+    total = len(texts)
+
+    with tqdm(
+        total=total,
+        desc="Embedding tài liệu",
+        unit="chunk",
+        dynamic_ncols=True,
+    ) as progress:
+        for start in range(0, total, batch_size):
+            batch = texts[start:start + batch_size]
+
+            for attempt in range(1, max_retries + 1):
+                try:
+                    progress.set_postfix_str(
+                        f"batch={start // batch_size + 1}"
+                    )
+
+                    embeddings = (
+                        embedding_service.embed_documents(batch)
+                    )
+
+                    result.extend(embeddings)
+                    progress.update(len(batch))
+                    break
+
+                except ClientError as error:
+                    if error.code != 429:
+                        raise
+
+                    if attempt >= max_retries:
+                        raise
+
+                    wait_seconds = max(
+                        20,
+                        delay_seconds * attempt,
+                    )
+
+                    tqdm.write(
+                        "Gemini giới hạn quota. "
+                        f"Chờ {wait_seconds:.0f} giây "
+                        f"({attempt}/{max_retries})..."
+                    )
+
+                    progress.set_postfix_str(
+                        f"chờ quota {wait_seconds:.0f}s"
+                    )
+
+                    time.sleep(wait_seconds)
+
+            if start + len(batch) < total:
+                progress.set_postfix_str(
+                    f"chờ {delay_seconds:.0f}s"
+                )
+                time.sleep(delay_seconds)
+
     return result
 
 
@@ -136,7 +230,7 @@ def import_file(
     repository: KnowledgeRepository,
     embedding_service: TextEmbeddingService,
 ) -> dict[str, Any]:
-    content = path.read_text(encoding="utf-8").strip()
+    content = read_document(path)
     if not content:
         return {"path": str(path), "status": "empty", "chunks": 0}
 
@@ -188,7 +282,10 @@ def import_file(
         embedding_provider=embedding_service.provider_name,
         embedding_model=embedding_service.model,
         embedding_dimension=embedding_service.dimension,
-        metadata={"file_name": path.name},
+        metadata={
+            "file_name": path.name,
+            "file_type": path.suffix.casefold(),
+        },
         chunks=stored_chunks,
     )
     return {
@@ -235,7 +332,7 @@ def main() -> None:
 
     if args.dry_run:
         for path in files:
-            content = path.read_text(encoding="utf-8").strip()
+            content = read_document(path)
             chunks = chunk_text(
                 content,
                 max_chars=RAG_CHUNK_SIZE,
