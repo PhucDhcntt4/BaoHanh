@@ -21,17 +21,19 @@ from app.knowledge.embedding_service import (
 
 SCHEMA_PATH = PROJECT_ROOT / "db_postgre" / "003_customer_care_rag.sql"
 SUPPORTED_SUFFIXES = {".md", ".txt"}
-KNOWN_CATEGORIES = {
-    "warranty",
-    "returns",
-    "exchange",
-    "policy",
-    "customer_care",
-    "faq",
-    "store",
-    "promotion",
-}
+CATEGORY_PATTERN = re.compile(
+    r"^[a-z0-9][a-z0-9_-]{0,99}$"
+)
 
+def normalize_category(value: str) -> str:
+    category = value.strip().casefold().replace(" ", "_")
+
+    if not CATEGORY_PATTERN.fullmatch(category):
+        raise ValueError(
+            "tên catarogy chỉ đđượcchuws chữ thường không dấu,số, dấu gạch dưới hoặc ngang"
+        )
+
+    return category
 
 def initialize_schema() -> None:
     with database_connection() as connection:
@@ -70,19 +72,25 @@ def document_category(
     explicit: str | None,
 ) -> str:
     if explicit:
-        return explicit.strip().casefold()
-    if source.is_dir():
-        try:
-            first_part = path.relative_to(source).parts[0].casefold()
-            if first_part in KNOWN_CATEGORIES:
-                return first_part
-        except (ValueError, IndexError):
-            pass
-    name = path.stem.casefold()
-    if "warranty" in name or "bao_hanh" in name:
-        return "warranty"
-    return "customer_care"
+        return normalize_category(explicit)
 
+    try:
+        relative_path = path.resolve().relative_to(
+            KNOWLEDGE_DIR.resolve()
+        )
+
+        # Ví dụ:
+        # knowledge/shipping/file.txt
+        # → relative_path.parts[0] = shipping
+        if len(relative_path.parts) >= 2:
+            return normalize_category(
+                relative_path.parts[0]
+            )
+
+    except ValueError:
+        pass
+
+    return "customer_care"
 
 def source_key(path: Path) -> str:
     resolved = path.resolve()
@@ -203,8 +211,10 @@ def main() -> None:
     )
     parser.add_argument(
         "--category",
-        choices=sorted(KNOWN_CATEGORIES),
-        help="Gán một category cho toàn bộ nguồn",
+        help=(
+            "Gán category cho nguồn. "
+            "Ví dụ: shipping, size_guide, payment"
+        ),
     )
     parser.add_argument(
         "--force",

@@ -16,6 +16,15 @@ PRODUCT_TYPE_GROUPS: tuple[frozenset[str], ...] = (
         "TUI XACH NHO (TXN)",
         "VI DI TIEC (VDT)",
     }),
+    # Các loại sandal rất dễ bị bộ phân loại ảnh nhầm do góc chụp chỉ thấy
+    # phần quai hoặc phần gót. Cho vector tìm trong cả họ sandal, sau đó bước
+    # Gemini verifier sẽ so sánh chính xác cấu trúc đế/gót/quai của từng mã.
+    frozenset({
+        "SANDAL CAO GOT (WSC)",
+        "SANDAL DE BANG (WSD)",
+        "SANDAL DE XUONG (WSX)",
+        "SANDAL KEP (WSK)",
+    }),
 )
 
 

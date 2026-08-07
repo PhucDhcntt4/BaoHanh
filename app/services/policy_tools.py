@@ -45,7 +45,7 @@ def search_customer_care_knowledge(question: str) -> dict[str, Any]:
         knowledge_service = knowledge_service or KnowledgeSearchService()
         return knowledge_service.search(
             question,
-            categories=["customer_care", "faq", "store", "promotion"],
+            categories=None
         )
     except Exception:
         logger.exception("Không thể tra cứu kiến thức chăm sóc khách hàng")
