@@ -74,56 +74,107 @@ class ProductImageHandler:
         original_image_bytes: bytes | None = None,
         original_mime_type: str | None = None,
     ) -> list[dict]:
+        """Global vector retrieval plus an additive product-type recall lane."""
+
         if not self.embedding_service or not self.embedding_repository:
             return []
 
         embedding = self.embedding_service.embed_bytes(image_bytes)
-        filtered_types = (
-            None
-            if product_type == "unknown"
-            else equivalent_product_types(product_type)
-        )
+
+        # Primary search is always global. The classifier never excludes a
+        # product from this result set.
         rows = self.embedding_repository.search(
             embedding=embedding,
             model_name=self.embedding_service.model_name,
             pretrained_name=self.embedding_service.pretrained_name,
-            product_type=filtered_types,
+            product_type=None,
             limit=VECTOR_SEARCH_LIMIT,
         )
-        decision = decide_vector_match(rows)
 
-        # Product type do AI phân loại có thể sai. Khi tập đã lọc
-        # không đủ tin cậy, thử lại trên toàn catalog.
-        if decision.status == "no_match" and filtered_types:
-            rows = self.embedding_repository.search(
+        global_row_count = len(rows)
+        type_row_count = 0
+        type_decision = None
+
+        # The classified family is an additive recall lane for screenshots or
+        # lifestyle photos whose catalog match ranks below the global limit.
+        if product_type != "unknown":
+            type_rows = self.embedding_repository.search(
                 embedding=embedding,
                 model_name=self.embedding_service.model_name,
                 pretrained_name=self.embedding_service.pretrained_name,
-                product_type=None,
-                limit=VECTOR_SEARCH_LIMIT,
+                product_type=equivalent_product_types(product_type),
+                limit=max(10, VECTOR_SEARCH_LIMIT // 2),
             )
-            decision = decide_vector_match(rows)
+            type_row_count = len(type_rows)
+            type_decision = decide_vector_match(type_rows)
+
+            merged_rows: dict[object, dict] = {}
+            for row_index, row in enumerate([*rows, *type_rows]):
+                identity = (
+                    row.get("product_image_id")
+                    or row.get("source_url")
+                    or ("row", row_index)
+                )
+                current = merged_rows.get(identity)
+                if (
+                    current is None
+                    or float(row.get("similarity") or 0)
+                    > float(current.get("similarity") or 0)
+                ):
+                    merged_rows[identity] = row
+            rows = sorted(
+                merged_rows.values(),
+                key=lambda item: float(item.get("similarity") or 0),
+                reverse=True,
+            )
 
         logger.info(
-            "VECTOR PRODUCT CANDIDATES status=%s top=%.4f margin=%.4f "
-            "values=%s",
+            "VECTOR RETRIEVAL classified_type=%s global_images=%s "
+            "type_images=%s merged_images=%s",
+            product_type,
+            global_row_count,
+            type_row_count,
+            len(rows),
+        )
+
+        decision = decide_vector_match(rows)
+        verification_candidates = list(decision.candidates)
+        type_candidate = (
+            type_decision.best_candidate
+            if (
+                type_decision is not None
+                and type_decision.status != "no_match"
+            )
+            else None
+        )
+        if type_candidate and all(
+            item.get("product_code") != type_candidate.get("product_code")
+            for item in verification_candidates
+        ):
+            verification_candidates.append(type_candidate)
+
+        logger.info(
+            "VECTOR PRODUCT CANDIDATES classified_type=%s status=%s "
+            "top=%.4f margin=%.4f values=%s",
+            product_type,
             decision.status,
             decision.top_similarity,
             decision.margin,
             [
                 {
                     "code": item["product_code"],
+                    "type": item.get("product_type"),
                     "color": item.get("color"),
                     "similarity": round(float(item["similarity"]), 4),
                 }
-                for item in decision.candidates
+                for item in verification_candidates
             ],
         )
         if decision.status == "no_match":
             return []
 
         candidate_codes = [
-            item["product_code"] for item in decision.candidates
+            item["product_code"] for item in verification_candidates
         ]
         verification = self.recognition.verify_vector_candidates(
             image_bytes=image_bytes,
@@ -141,61 +192,6 @@ class ProductImageHandler:
             verification.confidence,
             verification.reason,
         )
-
-# Bộ phân loại chỉ là một công cụ tăng tốc tìm kiếm. Nếu mọi ứng viên trong
-# loại sản phẩm được lọc đều bị từ chối, hãy thử tìm kiếm trên toàn bộ
-# danh mục thay vì coi bộ lọc đó là sự thật trong kinh doanh.
-        if (
-            filtered_types
-            and (
-                not verification.exact_match
-                or not verification.product_code
-                or verification.confidence < 0.90
-            )
-        ):
-            rows = self.embedding_repository.search(
-                embedding=embedding,
-                model_name=self.embedding_service.model_name,
-                pretrained_name=self.embedding_service.pretrained_name,
-                product_type=None,
-                limit=VECTOR_SEARCH_LIMIT,
-            )
-            decision = decide_vector_match(rows)
-            logger.info(
-                "VECTOR GLOBAL RETRY status=%s top=%.4f margin=%.4f "
-                "values=%s",
-                decision.status,
-                decision.top_similarity,
-                decision.margin,
-                [
-                    {
-                        "code": item["product_code"],
-                        "color": item.get("color"),
-                        "similarity": round(float(item["similarity"]), 4),
-                    }
-                    for item in decision.candidates
-                ],
-            )
-            if decision.status != "no_match":
-                candidate_codes = [
-                    item["product_code"] for item in decision.candidates
-                ]
-                verification = self.recognition.verify_vector_candidates(
-                    image_bytes=image_bytes,
-                    mime_type=mime_type,
-                    candidate_rows=rows,
-                    candidate_codes=candidate_codes,
-                    original_image_bytes=original_image_bytes,
-                    original_mime_type=original_mime_type,
-                )
-                logger.info(
-                    "VECTOR GLOBAL VERIFIED exact=%s code=%s "
-                    "confidence=%.3f reason=%s",
-                    verification.exact_match,
-                    verification.product_code,
-                    verification.confidence,
-                    verification.reason,
-                )
 
         # A near tie means the joint verifier is comparing very similar
         # products. If it rejects the vector leader and selects another code,
@@ -222,13 +218,21 @@ class ProductImageHandler:
                 mime_type=original_mime_type or mime_type,
                 product_code=top_code,
             )
+            top_recheck_details = (
+                "; ".join(top_verification.mismatches)
+                if top_verification.mismatches
+                else (
+                    "matched_reference="
+                    f"{top_verification.matched_reference}"
+                )
+            )
             logger.info(
                 "VECTOR TOP RECHECK code=%s exact=%s confidence=%.3f "
-                "reason=%s",
+                "details=%s",
                 top_code,
                 top_verification.exact_match,
                 top_verification.confidence,
-                top_verification.reason,
+                top_recheck_details,
             )
             if (
                 top_verification.exact_match
@@ -239,7 +243,7 @@ class ProductImageHandler:
                 verification.confidence = top_verification.confidence
                 verification.reason = (
                     "Vector leader confirmed by dedicated recheck: "
-                    f"{top_verification.reason}"
+                    f"{top_recheck_details}"
                 )
 
         if (
