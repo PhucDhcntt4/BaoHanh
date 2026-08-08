@@ -47,7 +47,7 @@ def initialize_schema() -> None:
 def discover_files(source: Path) -> list[Path]:
     if source.is_file():
         if source.suffix.casefold() not in SUPPORTED_SUFFIXES:
-            raise ValueError("RAG hiện chỉ hỗ trợ file .txt và .md")
+            raise ValueError("RAG hiện chỉ hỗ trợ file .txt,.md, .pdf")
         return [source]
     if not source.exists():
         raise FileNotFoundError(f"Không tìm thấy nguồn tài liệu: {source}")
